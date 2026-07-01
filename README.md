@@ -25,7 +25,7 @@ provenance recorded, risky licenses flagging, and other oss best practices.
 #### Install
 
 ```bash
-$ npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill open-source-vendoring-best-practices
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill open-source-vendoring-best-practices
 ```
 
 ### [google-adk-architecture](skills/google-adk-architecture)
@@ -36,7 +36,7 @@ _Vendored from [google/adk-python](https://github.com/google/adk-python) (Apache
 #### Install
 
 ```bash
-$ npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-architecture
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-architecture
 ```
 
 ### [google-adk-agent-builder](skills/google-adk-agent-builder)
@@ -47,7 +47,7 @@ _Vendored from [google/adk-python](https://github.com/google/adk-python) (Apache
 #### Install
 
 ```bash
-$ npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-agent-builder
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-agent-builder
 ```
 
 <br>
