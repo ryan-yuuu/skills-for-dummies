@@ -14,7 +14,7 @@ Write and structure docs following the Diátaxis framework, governing documentat
 #### Install
 
 ```bash
-$ npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill diataxis-docs-writer
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill diataxis-docs-writer
 ```
 
 ### [open-source-vendoring-best-practices](skills/open-source-vendoring-best-practices)
