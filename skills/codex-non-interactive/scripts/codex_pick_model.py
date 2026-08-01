@@ -7,6 +7,12 @@ goes stale and silently runs on a weaker model than the user is paying for.
 `priority` ranking and each model's supported reasoning levels. This resolves
 that at call time instead.
 
+Note that `codex debug models` is an *experimental* subcommand upstream, so its
+field names may change. Every field read here is treated as optional: if the
+catalog can't be understood, this exits non-zero with a clear message so the
+caller can fall back to invoking codex without `-m`, rather than emitting
+garbage flags.
+
 Usage:
     # Splice flags straight into a command. Inline $(...) is the portable form:
     # command substitution word-splits in both bash and zsh.
@@ -21,24 +27,30 @@ Usage:
     python3 codex_pick_model.py                 # -m <best> -c model_reasoning_effort=xhigh
     python3 codex_pick_model.py --effort max    # request a specific effort
     python3 codex_pick_model.py --slug-only     # just the model slug
-    python3 codex_pick_model.py --list          # show the whole catalog
+    python3 codex_pick_model.py --list          # show selectable models
 
 Effort defaults to `xhigh`. If the chosen model doesn't support the requested
-level, this falls back to the strongest level it does support and says so on
-stderr rather than emitting a flag the CLI would reject.
+level, this resolves *downward* to the strongest level it does support -- never
+upward, so a request can't silently become more expensive than what was asked
+for. It only goes above the request when the model supports nothing lower.
 """
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import sys
 
-# Strongest last. Used to rank a model's supported levels and to resolve a
-# requested effort the model can't honor down to its best available.
-EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"]
+# Weakest to strongest. `minimal` is documented upstream but absent from every
+# model in the observed catalog; `max` and `ultra` are in the catalog but not in
+# the published config reference. Keeping the union means this ranks correctly
+# whichever vocabulary a given release actually ships.
+EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
 DEFAULT_EFFORT = "xhigh"
+
+CATALOG_TIMEOUT_S = 45
 
 
 def load_catalog(bundled_only=False):
@@ -52,22 +64,31 @@ def load_catalog(bundled_only=False):
     for bundled in attempts:
         cmd = ["codex", "debug", "models"] + (["--bundled"] if bundled else [])
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=CATALOG_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            last_err = "timed out"
+            last_err = f"`{' '.join(cmd)}` timed out after {CATALOG_TIMEOUT_S}s"
+            continue
+        except OSError as exc:
+            last_err = f"could not run `{' '.join(cmd)}`: {exc}"
             continue
         if proc.returncode != 0:
-            last_err = (proc.stderr or "").strip()
+            last_err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
             continue
         try:
-            models = json.loads(proc.stdout).get("models") or []
+            payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             last_err = f"unparseable catalog: {exc}"
             continue
+        # Everything below is untrusted shape: guard rather than assume.
+        if not isinstance(payload, dict):
+            last_err = f"catalog is {type(payload).__name__}, expected an object"
+            continue
+        models = [m for m in (payload.get("models") or []) if isinstance(m, dict)]
         if models:
             if bundled and not bundled_only:
-                print("note: using bundled catalog (refresh failed)", file=sys.stderr)
+                print(f"note: using bundled catalog ({last_err or 'refresh failed'})", file=sys.stderr)
             return models
+        last_err = last_err or "catalog contained no usable model entries"
 
     sys.exit(f"error: could not load model catalog: {last_err or 'empty catalog'}")
 
@@ -78,51 +99,80 @@ def selectable(models):
     `visibility: hide` marks internal entries (e.g. codex-auto-review) that
     aren't meant to be selected directly.
     """
-    return [m for m in models if m.get("visibility") == "list" and m.get("slug")]
+    return [m for m in models if m.get("visibility") == "list" and isinstance(m.get("slug"), str)]
+
+
+def _priority_key(model):
+    # Catalogs have shipped priorities as ints; treat anything else as
+    # unranked so a type change degrades to alphabetical instead of crashing.
+    priority = model.get("priority")
+    if not isinstance(priority, int) or isinstance(priority, bool):
+        return (10**6, model.get("slug", ""))
+    return (priority, model.get("slug", ""))
 
 
 def best_model(models):
-    """Lowest `priority` wins — the catalog ranks strongest first (priority 1
+    """Lowest `priority` wins -- the catalog ranks strongest first (priority 1
     is described as the latest frontier agentic coding model)."""
-    ranked = sorted(selectable(models), key=lambda m: (m.get("priority", 10**6), m["slug"]))
+    ranked = sorted(selectable(models), key=_priority_key)
     if not ranked:
         sys.exit("error: no selectable models in catalog")
     return ranked[0]
 
 
-def supported_efforts(model):
-    levels = [
-        lvl.get("effort")
-        for lvl in model.get("supported_reasoning_levels") or []
-        if lvl.get("effort")
-    ]
-    # Preserve the canonical weak->strong ordering; ignore unknown names.
-    return [e for e in EFFORT_ORDER if e in levels]
+def supported_efforts(model, warn=False):
+    """Effort levels this model supports, ordered weakest to strongest."""
+    levels = model.get("supported_reasoning_levels")
+    if not isinstance(levels, list):
+        return []
+    raw = [lvl.get("effort") for lvl in levels if isinstance(lvl, dict) and isinstance(lvl.get("effort"), str)]
+    known = [e for e in EFFORT_ORDER if e in raw]
+    if known:
+        return known
+    if raw and warn:
+        # The catalog renamed the vocabulary. Preserve its ordering rather than
+        # silently reporting "no levels", which would disable validation.
+        print(
+            f"note: unrecognized effort names in catalog ({', '.join(raw)}); using catalog order",
+            file=sys.stderr,
+        )
+    return raw
 
 
 def resolve_effort(model, requested):
-    """Return an effort the model actually supports.
+    """Return an effort the model actually supports, resolving downward.
 
-    Emitting an unsupported level would make the whole `codex exec` call fail,
-    which is a worse outcome than quietly running one tier lower.
+    Emitting an unsupported level makes the whole `codex exec` call fail, but
+    silently *escalating* is worse than failing: it spends more of the user's
+    quota than they asked for. So prefer the strongest supported level that is
+    still <= the request, and only exceed the request when nothing lower exists.
     """
-    available = supported_efforts(model)
+    available = supported_efforts(model, warn=True)
     if not available:
         # Catalog didn't report levels; trust the caller rather than block.
         return requested
     if requested in available:
         return requested
-    fallback = available[-1]
+
+    if requested in EFFORT_ORDER and all(a in EFFORT_ORDER for a in available):
+        cutoff = EFFORT_ORDER.index(requested)
+        lower = [a for a in available if EFFORT_ORDER.index(a) < cutoff]
+        choice = lower[-1] if lower else available[0]
+    else:
+        choice = available[0]
+
+    direction = "down" if EFFORT_ORDER.index(choice) < EFFORT_ORDER.index(requested) else "up"
     print(
-        f"note: {model['slug']} does not support effort '{requested}'; "
-        f"using '{fallback}' (supports: {', '.join(available)})",
+        f"note: {model.get('slug', '?')} does not support effort '{requested}'; "
+        f"resolving {direction} to '{choice}' (supports: {', '.join(available)})",
         file=sys.stderr,
     )
-    return fallback
+    return choice
 
 
 def render_list(models):
-    rows = sorted(selectable(models), key=lambda m: (m.get("priority", 10**6), m["slug"]))
+    rows = sorted(selectable(models), key=_priority_key)
+    hidden = len(models) - len(rows)
     width = max((len(m["slug"]) for m in rows), default=10)
     out = [f"{'PRIO':<5} {'MODEL':<{width}}  {'DEFAULT':<8} EFFORTS"]
     for m in rows:
@@ -130,22 +180,31 @@ def render_list(models):
             f"{m.get('priority', '?'):<5} {m['slug']:<{width}}  "
             f"{m.get('default_reasoning_level', '?'):<8} {','.join(supported_efforts(m))}"
         )
+    if hidden:
+        out.append(f"({hidden} hidden entr{'y' if hidden == 1 else 'ies'} omitted -- visibility != \"list\")")
     return "\n".join(out)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--effort", default=DEFAULT_EFFORT, help=f"reasoning effort (default: {DEFAULT_EFFORT})")
-    ap.add_argument("--model", help="use this slug instead of auto-selecting the strongest")
-    ap.add_argument("--slug-only", action="store_true", help="print only the model slug")
-    ap.add_argument("--effort-only", action="store_true", help="print only the resolved effort")
     ap.add_argument(
+        "--effort",
+        default=DEFAULT_EFFORT,
+        choices=EFFORT_ORDER,
+        help=f"reasoning effort (default: {DEFAULT_EFFORT})",
+    )
+    ap.add_argument("--model", help="use this slug instead of auto-selecting the strongest")
+    ap.add_argument("--bundled", action="store_true", help="skip the network refresh")
+    # These four each own stdout, so allowing two would emit an unusable mix.
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--slug-only", action="store_true", help="print only the model slug")
+    mode.add_argument("--effort-only", action="store_true", help="print only the resolved effort")
+    mode.add_argument(
         "--export",
         action="store_true",
         help="emit shell assignments for CODEX_MODEL/CODEX_EFFORT (use with eval)",
     )
-    ap.add_argument("--list", dest="do_list", action="store_true", help="print the catalog and exit")
-    ap.add_argument("--bundled", action="store_true", help="skip the network refresh")
+    mode.add_argument("--list", dest="do_list", action="store_true", help="print selectable models and exit")
     args = ap.parse_args()
 
     models = load_catalog(bundled_only=args.bundled)
@@ -155,10 +214,10 @@ def main():
         return 0
 
     if args.model:
-        match = next((m for m in models if m.get("slug") == args.model), None)
+        match = next((m for m in selectable(models) if m.get("slug") == args.model), None)
         if match is None:
             available = ", ".join(m["slug"] for m in selectable(models))
-            sys.exit(f"error: model '{args.model}' not in catalog. Available: {available}")
+            sys.exit(f"error: model '{args.model}' not selectable. Available: {available}")
         model = match
     else:
         model = best_model(models)
@@ -170,12 +229,12 @@ def main():
     elif args.effort_only:
         print(effort)
     elif args.export:
-        # Single-quoted so the values survive eval unchanged. Slugs and effort
-        # names come from a fixed vocabulary, but quoting costs nothing.
-        print(f"CODEX_MODEL='{model['slug']}'")
-        print(f"CODEX_EFFORT='{effort}'")
+        # shlex.quote, not hand-rolled quoting: these values are consumed by
+        # `eval`, and a slug containing a quote would otherwise execute.
+        print(f"CODEX_MODEL={shlex.quote(model['slug'])}")
+        print(f"CODEX_EFFORT={shlex.quote(effort)}")
     else:
-        print(f"-m {model['slug']} -c model_reasoning_effort={effort}")
+        print(f"-m {shlex.quote(model['slug'])} -c model_reasoning_effort={shlex.quote(effort)}")
     return 0
 
 

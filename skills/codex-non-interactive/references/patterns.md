@@ -3,9 +3,16 @@
 Composable recipes for `codex exec`. Behaviors verified against codex-cli
 0.146.0; `codex exec --help` is the authority if anything here is rejected.
 
-`MF` in these examples is the model/effort pair from
-`scripts/codex_pick_model.py` — see the model section in `SKILL.md` for why
-leaving those at their defaults costs real quality.
+Examples resolve the model once with `--export` and expand it as a quoted
+array. Do **not** stash the flag string in a plain variable and expand it
+unquoted — zsh doesn't word-split parameter expansions, so `$MF` arrives as a
+single argument and the run dies with an opaque HTTP 400. See the model section
+in `SKILL.md` for why the defaults are worth overriding at all.
+
+```bash
+eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
+MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
+```
 
 ## Contents
 
@@ -27,7 +34,8 @@ the setup cost here.
 
 ```bash
 git worktree add /tmp/codex-wt -b codex/fix-parser
-codex exec $(python3 scripts/codex_pick_model.py) -s workspace-write -C /tmp/codex-wt \
+codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
+  -c sandbox_workspace_write.network_access=true \
   "Fix the failing test in tests/test_parser.py. Run 'pytest tests/test_parser.py'
    until it passes. Change only src/parser.py." \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
@@ -54,6 +62,12 @@ git branch -D codex/fix-parser
 worktree. Without it, `-s workspace-write` applies to wherever you invoked the
 command.
 
+`sandbox_workspace_write.network_access=true` is there because
+**`workspace-write` blocks network by default** — without it, any test run that
+resolves a hostname or fetches a dependency fails, and `exec` has no approval
+prompt to escalate through. Omit it when the task genuinely needs no network;
+that's the safer default when you can afford it.
+
 ## Multi-turn with resume
 
 Useful when a task splits into stages and the second stage depends on what the
@@ -61,10 +75,8 @@ first one learned. Resuming preserves the session's context, so the follow-up
 prompt doesn't need to restate it.
 
 ```bash
-MF=$(python3 scripts/codex_pick_model.py)
-
 # Stage 1 — note: no --ephemeral, or there is no session to resume
-codex exec $MF --json -s workspace-write \
+codex exec "${MODEL[@]}" --json -s workspace-write \
   "Review src/ for race conditions. List each with file and line." \
   < /dev/null > stage1.jsonl
 
@@ -118,7 +130,7 @@ command produces the data you want examined:
 
 ```bash
 npm test 2>&1 \
-  | codex exec -s read-only "Summarize the failing tests and propose the smallest fix"
+  | codex exec "${MODEL[@]}" -s read-only "Summarize the failing tests and propose the smallest fix"
 ```
 
 Note there is no `< /dev/null` here — stdin is deliberately in use.
@@ -134,9 +146,15 @@ printf 'Summarize this log in 3 bullets:\n\n%s\n' "$(tail -n 200 app.log)" | cod
 Since stdout is just the final message, Codex composes with ordinary Unix tools:
 
 ```bash
-gh run view 123456 --log | codex exec "summarize this CI failure in 5 bullets" \
+gh run view 123456 --log | codex exec "${MODEL[@]}" -s read-only \
+  "summarize this CI failure in 5 bullets" \
   | gh pr comment 789 --body-file -
 ```
+
+**Piped content is untrusted input.** CI logs, pull request bodies, commit
+messages, and issue text can all carry instructions aimed at the model. Keep
+runs like this `read-only`, treat the output as a draft rather than something to
+post unread, and don't pipe attacker-influenced text into a write-enabled run.
 
 ## Structured output
 
@@ -169,11 +187,14 @@ cat > review-schema.json <<'EOF'
 }
 EOF
 
-codex exec review --base main --ephemeral \
+codex exec review "${MODEL[@]}" --base main --ephemeral \
+  -c sandbox_mode='"read-only"' \
   --output-schema review-schema.json -o findings.json < /dev/null
 
 jq -r '.findings[] | select(.severity=="high") | "\(.file):\(.line) — \(.issue)"' findings.json
 ```
+
+`review` has no `-s` flag, hence the `-c sandbox_mode` override.
 
 `--output-schema` takes a **file path**, not inline JSON. Keep schemas strict
 (`required` + `additionalProperties: false`) so a malformed response fails
@@ -186,10 +207,8 @@ is the cost — every run consumes quota — so fan out across genuinely differe
 subjects rather than re-asking one question many ways.
 
 ```bash
-MF=$(python3 scripts/codex_pick_model.py)   # resolve once, not per iteration
-
 for area in auth billing search; do
-  codex exec $MF --ephemeral -s read-only \
+  codex exec "${MODEL[@]}" --ephemeral -s read-only \
     "Audit src/$area/ for error-handling gaps. List findings, most severe first." \
     < /dev/null > "audit-$area.md" 2> "audit-$area.log" &
 done
@@ -209,7 +228,7 @@ Raise effort here rather than accepting the default — finding the real objecti
 is exactly the kind of work that rewards deeper reasoning:
 
 ```bash
-codex exec $(python3 scripts/codex_pick_model.py --effort max) --ephemeral -s read-only \
+codex exec -m "$CODEX_MODEL" -c model_reasoning_effort=max --ephemeral -s read-only \
   "Read docs/rfc-caching.md and the code in src/cache/.
    Argue the strongest case AGAINST this design, grounded in what the code
    actually does. Name concrete failure scenarios with file and line.
@@ -229,7 +248,7 @@ up front:
 
 ```bash
 # Background: doesn't block, collect the files when it finishes
-codex exec -s read-only "<large audit>" < /dev/null \
+codex exec "${MODEL[@]}" -s read-only "<large audit>" < /dev/null \
   > audit.md 2> audit.log &
 CODEX_PID=$!
 wait $CODEX_PID; echo "exit=$?"
@@ -243,8 +262,8 @@ readable snapshot at any point — the digest reports `INCOMPLETE` while the
 stream is still open, which distinguishes "still working" from "finished":
 
 ```bash
-codex exec --json -s read-only "<task>" < /dev/null > run.jsonl 2> run.log &
-python3 scripts/codex_digest.py run.jsonl   # safe to run mid-flight
+codex exec "${MODEL[@]}" --json -s read-only "<task>" < /dev/null > run.jsonl 2> run.log &
+python3 "$SKILL_DIR/scripts/codex_digest.py" run.jsonl   # safe to run mid-flight
 ```
 
 ## CI usage
@@ -254,14 +273,14 @@ over installing the CLI yourself — it proxies the API key rather than exposing
 it to job steps that run repository-controlled code.
 
 When running the CLI directly, pin behavior against local-config drift and fail
-loudly:
+loudly. Run your setup steps (`npm ci`, `pip install`) *before* invoking Codex,
+so the run itself needs no network — that's what lets you leave the default
+network-off `workspace-write` sandbox alone:
 
 ```bash
 set -euo pipefail
 
-MF=$(python3 scripts/codex_pick_model.py)   # don't hardcode a slug in CI either
-
-CODEX_API_KEY="$SECRET_KEY" codex exec $MF \
+CODEX_API_KEY="$SECRET_KEY" codex exec "${MODEL[@]}" \
   --json \
   --ephemeral \
   --sandbox workspace-write \
@@ -275,7 +294,7 @@ CODEX_API_KEY="$SECRET_KEY" codex exec $MF \
     echo "::error::codex run failed"; tail -50 run.log; exit 1;
   }
 
-python3 scripts/codex_digest.py run.jsonl
+python3 "$SKILL_DIR/scripts/codex_digest.py" run.jsonl
 ```
 
 Each flag addresses a specific CI hazard:
@@ -288,8 +307,15 @@ Each flag addresses a specific CI hazard:
 | `--ephemeral` | Session files accumulating on the runner |
 | `--color never` | ANSI escapes corrupting captured logs |
 
-Set `CODEX_API_KEY` inline for the single command rather than as a job-level
-env var — anything else in that process environment can read an exported key.
+If the task genuinely can't be pre-provisioned, add
+`-c sandbox_workspace_write.network_access=true` — but prefer installing
+dependencies beforehand, since that keeps the model's reach narrower.
+
+Set `CODEX_API_KEY` inline for the single command rather than as a job-level env
+var — and the same for `OPENAI_API_KEY`. Anything else in that process
+environment (build scripts, tests, dependency lifecycle hooks) can read an
+exported key. Sanitize any prompt text drawn from pull requests, commit
+messages, or issue bodies before it reaches Codex.
 
 The safest shape for a write-enabled CI job is to grant Codex only read
 permissions on the repository, have it produce a patch, and open the pull

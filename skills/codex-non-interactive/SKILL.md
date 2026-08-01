@@ -38,10 +38,32 @@ UI, which waits forever for keystrokes that will never come — your Bash call
 hangs and the session is stuck. The non-interactive entry point is `codex exec`
 (alias `codex e`).
 
+Two preconditions worth checking once, since both fail confusingly rather than
+clearly. Codex must be installed and authenticated, and it refuses to run
+outside a Git repository:
+
+```bash
+codex --version && codex login status   # exits 0 when credentials exist
+```
+
+If either fails, say Codex isn't available rather than retrying or quietly
+falling back — `codex doctor` diagnoses installation, config, auth, and Git
+health in one pass. Outside a Git repo you'll get *"Not inside a trusted
+directory and --skip-git-repo-check was not specified"*; pass
+`--skip-git-repo-check` only when you're sure the directory is safe.
+
+Paths below are written relative to this skill's directory. You'll be running
+`codex` from the target repository, not from here, so set this once and use it
+throughout:
+
+```bash
+SKILL_DIR=/path/to/skills/codex-non-interactive
+```
+
 The safe baseline, which you can copy and adjust:
 
 ```bash
-codex exec $(python3 scripts/codex_pick_model.py) \
+codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   --ephemeral -s read-only "<self-contained prompt>" < /dev/null
 ```
 
@@ -86,32 +108,31 @@ There is no `--effort` flag; effort is set through a config override.
 slug either errors out or silently pins Codex to an old model. Discover the
 strongest one at call time:
 
-```bash
-codex debug models          # full JSON catalog this binary can actually see
-```
-
-Each entry carries a `priority` (lower is stronger — `1` is the current
-frontier coding model), a `visibility` (`hide` marks internal entries you
-shouldn't select), and its `supported_reasoning_levels`. The bundled script
-does that selection for you:
+`codex debug models` prints the catalog this binary sees, ranked by `priority`.
+The bundled script reads it and picks for you (field details in
+`references/flags.md`):
 
 ```bash
-python3 scripts/codex_pick_model.py             # -m gpt-5.6-sol -c model_reasoning_effort=xhigh
-python3 scripts/codex_pick_model.py --list      # inspect the whole catalog
-python3 scripts/codex_pick_model.py --effort max
+python3 "$SKILL_DIR/scripts/codex_pick_model.py"           # -m <strongest> -c model_reasoning_effort=xhigh
+python3 "$SKILL_DIR/scripts/codex_pick_model.py" --list    # selectable models
+python3 "$SKILL_DIR/scripts/codex_pick_model.py" --effort max
 ```
 
 Splice it straight into a command:
 
 ```bash
-codex exec $(python3 scripts/codex_pick_model.py) -s read-only "<task>" < /dev/null
+codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") -s read-only "<task>" < /dev/null
 ```
+
+`codex debug models` is an experimental subcommand, so the script exits
+non-zero with a clear message if the catalog shape changes — fall back to
+running without `-m` rather than guessing a slug.
 
 **Use the inline `$(...)` form, not a variable holding the flag string.** This
 one is worth internalizing because it fails differently depending on the shell:
 
 ```bash
-MF=$(python3 scripts/codex_pick_model.py)
+MF=$(python3 "$SKILL_DIR/scripts/codex_pick_model.py")
 codex exec $MF ...        # WRONG — works in bash, breaks in zsh
 ```
 
@@ -126,23 +147,26 @@ To resolve the catalog once and reuse it — in a loop, or across several calls 
 use `--export`, which keeps every value individually quoted:
 
 ```bash
-eval "$(python3 scripts/codex_pick_model.py --export)"
+eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
 codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
   -s read-only "<task>" < /dev/null
 ```
 
 ### Choosing an effort level
 
-Levels run `low → medium → high → xhigh → max → ultra`, though not every model
-supports the top ones (the script falls back to the model's best supported level
-rather than emitting a flag the CLI would reject).
+Levels run `low → medium → high → xhigh → max → ultra`, and support varies by
+model — the script resolves an unsupported request *downward* to the model's
+best supported level, never upward, so a request can't silently cost more than
+you asked for. (The published docs stop at `xhigh` and don't list `max`/`ultra`;
+the binary has them. See `references/flags.md`.)
 
-**Default to `xhigh`.** It's supported by every currently listed model and is
-the right setting for the work worth delegating at all. Reach past it only
-deliberately: `max` for genuinely hard reasoning — subtle concurrency bugs,
-intricate refactors — and `ultra`, which adds automatic task delegation, for
-large open-ended work. Drop to `medium` only for mechanical, low-stakes calls
-where latency matters more than depth.
+**Default to `xhigh`.** Every model in the observed catalog supports it, and
+it's the right setting for work worth delegating at all — though upstream notes
+`xhigh` is model-dependent, so it's a live-catalog fact rather than a
+guarantee. Reach past it deliberately: `max` for genuinely hard reasoning —
+subtle concurrency bugs, intricate refactors — and `ultra`, which adds automatic
+task delegation, for large open-ended work. Drop to `medium` only for
+mechanical, low-stakes calls where latency matters more than depth.
 
 Higher effort costs more tokens and wall-clock time. That trade is usually worth
 taking, because the expensive failure is not a slow run — it's a fast, confident,
@@ -244,6 +268,25 @@ safety boundary**. Choose the least privilege that lets the task finish:
 answer when `workspace-write` is *almost* enough — reach for it instead of
 escalating to full access.
 
+**`workspace-write` blocks network access by default.** This catches out the
+most common delegated task there is: "fix this and run the tests" dies the
+moment the test command fetches a dependency, and since `exec` has no approval
+prompt, nothing asks — it just fails. Either install dependencies before
+invoking Codex (better, keeps its reach narrow) or enable network explicitly:
+
+```bash
+-c sandbox_workspace_write.network_access=true
+```
+
+**Two subcommands can't take `-s` at all.** `codex exec resume` inherits the
+original session's sandbox — so a follow-up you think of as "just a question"
+still carries write access — and `codex exec review` rejects `-s` outright. For
+both, constrain them through config instead:
+
+```bash
+-c sandbox_mode='"read-only"'
+```
+
 `--dangerously-bypass-approvals-and-sandbox` removes the boundary entirely.
 Don't use it to make an error message go away; if a task is failing under
 `workspace-write`, that is usually information about the task, not the sandbox.
@@ -254,7 +297,7 @@ that are painful to untangle. Isolate it first:
 
 ```bash
 git worktree add /tmp/codex-wt -b codex/attempt
-codex exec $(python3 scripts/codex_pick_model.py) \
+codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   -s workspace-write -C /tmp/codex-wt "<task>" < /dev/null
 git -C /tmp/codex-wt diff main   # review before it touches your tree
 ```
@@ -265,13 +308,13 @@ These all resolve the model once up front (see the shell-splitting note above
 for why the values are kept in separate quoted variables):
 
 ```bash
-eval "$(python3 scripts/codex_pick_model.py --export)"
+eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
 MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
 ```
 
 `MODEL` is an array, expanded below as `"${MODEL[@]}"` — safe in both bash and
 zsh. If arrays feel like overkill for a one-off, just inline
-`$(python3 scripts/codex_pick_model.py)` instead.
+`$(python3 "$SKILL_DIR/scripts/codex_pick_model.py")` instead.
 
 **Ask** — a question, a design critique, a brainstorm. Read-only, answer on
 stdout. This is where model diversity pays: a different model family reaches
@@ -318,22 +361,48 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only --output-schema schema.json \
 `--output-schema` takes a file path, not inline JSON. `-o/--output-last-message`
 writes the final message to a file *and* still prints it to stdout.
 
-## Long runs will outlive your default timeout
+## Long runs, and running several at once
 
-A real Codex task runs for minutes — often longer than a default Bash timeout,
-and a timeout kills the run with nothing to show for the tokens spent. Two ways
-to handle it, both fine:
+A real Codex task runs for minutes, often past a default command timeout — and a
+timeout kills the run with nothing to show for the tokens already spent. Two
+mechanisms cover this, and they compose:
 
-- **Run it in the background** and collect the output file when it finishes.
-  Best for anything you expect to take a while, since it doesn't block you.
-- **Raise the timeout explicitly** on the tool call. Simpler when you need the
-  answer before you can do anything else.
+**1. Background the tool call.** Detach it so you keep working and get notified
+when it exits. This is the right default for a single long task: it doesn't
+block you, and it doesn't depend on guessing a timeout correctly. Prefer it to
+simply raising the timeout, which trades one blocking wait for a longer one.
 
-Either way, redirect to files rather than relying on scrollback:
+**2. Fan out inside one call**, with `&` and `wait` — several runs concurrently,
+reporting back once when the batch finishes. Use it when the runs form a single
+unit of work.
 
 ```bash
-codex exec -s read-only "<task>" < /dev/null > answer.md 2> progress.log
+for area in auth billing search; do
+  codex exec "${MODEL[@]}" --ephemeral -s read-only \
+    "Audit src/$area/ for error-handling gaps. List findings, most severe first." \
+    < /dev/null > "audit-$area.md" 2> "audit-$area.log" &
+done
+wait
 ```
+
+They compose in two useful ways. One backgrounded call that fans out internally
+gives you N parallel runs and a single notification. Backgrounding N separate
+calls instead gives N notifications, so you can act on each result as it lands
+rather than waiting for the slowest.
+
+Three constraints apply either way:
+
+- **Parallelism multiplies cost.** Four concurrent runs cost four runs. It buys
+  wall-clock, not quota — so fan out across genuinely separable subjects, not
+  the same question asked several ways.
+- **Concurrent writers collide.** Keep parallel runs `read-only`, or give each
+  its own worktree. Two agents writing one tree corrupt each other's work.
+- **Always redirect to files.** There's no stream to watch, so
+  `> answer.md 2> progress.log` isn't housekeeping — it's how you get the result
+  at all, and `progress.log` is where a failure explains itself.
+
+`codex_digest.py` reads a partial JSONL stream mid-flight and reports
+`INCOMPLETE`, which is how you tell "still working" from "finished".
 
 ## Trust the work, verify the output
 
@@ -379,12 +448,7 @@ long task you'd rather not spend your own context on.
 
 ## Reference material
 
-Paths below are relative to this skill's directory. You'll generally be running
-`codex` from the target repository instead, so resolve them against the skill
-directory — e.g. `python3 <skill-dir>/scripts/codex_pick_model.py` — rather than
-assuming the current working directory.
-
-Read these as needed rather than up front:
+Read these as needed rather than up front (`$SKILL_DIR` is set above):
 
 - **`references/flags.md`** — flag tables for `exec`, `exec resume`, and
   `exec review`, plus useful `-c` config overrides, model catalog fields, auth,
@@ -399,7 +463,7 @@ Read these as needed rather than up front:
 - **`scripts/codex_digest.py`** — condenses a `--json` event stream into a short
   digest (commands run, files changed, final message, token usage). Use it
   instead of reading raw JSONL into context:
-  `python3 scripts/codex_digest.py run.jsonl`
+  `python3 "$SKILL_DIR/scripts/codex_digest.py" run.jsonl`
 
 ## Keeping Codex current
 
@@ -417,8 +481,12 @@ repository. Newer releases are how the strongest models become reachable at all,
 so an out-of-date binary quietly caps the quality of everything above.
 
 When a flag is rejected, check `codex exec --help` before assuming the command
-is wrong — that output is the authority, and it beats any documentation
-including this file. The behaviors described here were verified against
-**codex-cli 0.146.0**; the notable divergences from the published docs (no
-`-a/--ask-for-approval`, no `--search`, deprecated `--full-auto`) held across
-0.144.1 and 0.146.0, but re-check rather than trusting that they still do.
+is wrong — it beats any documentation including this file. One caveat: some
+accepted flags are hidden (`--full-auto`, `--yolo`, `--experimental-json`), so
+`--help` proves a flag exists but never proves one doesn't.
+
+Behaviors here were verified against **codex-cli 0.146.0**. Two genuine
+divergences from the published docs are worth knowing: `-a/--ask-for-approval`
+and `--search` exist on `codex` but are rejected by `codex exec`, and the effort
+ladder runs past the documented `xhigh` to `max` and `ultra`. Re-check rather
+than assuming these still hold.

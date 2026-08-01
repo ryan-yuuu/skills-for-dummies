@@ -39,8 +39,18 @@ piped *and* a prompt argument is present, the piped content is appended as a
 
 | Flag | Effect |
 |---|---|
-| `-s, --sandbox <MODE>` | `read-only` (default), `workspace-write`, `danger-full-access`. |
+| `-s, --sandbox <MODE>` | `read-only`, `workspace-write`, `danger-full-access`. `exec` pins `read-only` when unset — it does *not* inherit the interactive default, which can resolve to `workspace-write`. |
 | `--add-dir <DIR>` | Extra writable directory alongside the workspace. Prefer this over escalating to full access. |
+
+**`workspace-write` blocks network access by default.** Verified with
+`codex sandbox`: `curl` under `workspace-write` couldn't resolve DNS, and
+returned 200 once network access was enabled. Since `exec` has no approval
+prompt to escalate through, a task whose tests fetch dependencies simply fails.
+Enable it deliberately:
+
+```bash
+codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "<task>" < /dev/null
+```
 | `--dangerously-bypass-approvals-and-sandbox` | No sandbox at all. Only inside an externally sandboxed environment. |
 | `--dangerously-bypass-hook-trust` | Runs enabled hooks without persisted trust. Only when hook sources are already vetted. |
 | `--skip-git-repo-check` | Allow running outside a Git repository. |
@@ -68,7 +78,7 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | `--ephemeral` | Don't persist session files. Omit when you intend to `resume`. |
 | `--ignore-user-config` | Skip `$CODEX_HOME/config.toml`. Auth still resolves via `CODEX_HOME`. |
 | `--ignore-rules` | Skip user and project execpolicy `.rules` files. |
-| `-i, --image <FILE>...` | Attach image(s) to the initial prompt. |
+| `-i, --image <FILE>...` | Attach image(s). **Variadic — it swallows the prompt.** `codex exec -i pic.png "do the thing"` consumes the prompt as a second image path and then blocks reading stdin. Put `-i` *after* the prompt, or separate with `--`. (On `resume` it's non-variadic and safe.) |
 
 Together, `--ignore-user-config --ignore-rules --strict-config` give a run that
 behaves the same regardless of local machine state — worth it in CI, where a
@@ -127,15 +137,36 @@ Runs a code review scoped to a review target. Targets are mutually exclusive:
 | `--commit <SHA>` | Changes introduced by one commit. |
 | *(bare `PROMPT`)* | Custom review instructions. |
 
-`--title <TITLE>` adds a commit title to the summary and applies only with
-`--commit`.
+All four targets are mutually exclusive at parse time — any pair errors out.
+
+`--title <TITLE>` is only half-enforced: used alone it hard-errors demanding
+`--commit`, but combined with `--base` or `--uncommitted` it parses cleanly and
+is silently ignored. Don't read a successful parse as proof it took effect.
+
+**`review` rejects most of `exec`'s flags** — the same class of surprise as
+`resume`, and more consequential because this is the review path. Rejected:
+`-s/--sandbox`, `-C/--cd`, `--add-dir`, `--color`, `-p/--profile`, `-i/--image`,
+`--oss`. It accepts `-c`, `-m`, `--json`, `-o`, `--output-schema`,
+`--ephemeral`, `--strict-config`, `--ignore-user-config`, `--ignore-rules`,
+`--skip-git-repo-check`, `--enable/--disable`, and the two `--dangerously-*`
+flags.
+
+Since there's no `-s`, constrain its sandbox through config:
+
+```bash
+codex exec review --base main -c sandbox_mode='"read-only"' < /dev/null
+```
 
 Pairs well with `--output-schema` when you want findings as structured data
 rather than prose you have to parse.
 
 ## Model selection and reasoning effort
 
-`codex debug models` prints the catalog this binary can actually see, as JSON:
+`codex debug models` prints the catalog this binary can actually see, as JSON.
+It's an **experimental** subcommand upstream ("may be removed or changed"), so
+treat its field names as liable to move — `codex_pick_model.py` exits non-zero
+with a clear message rather than emitting garbage flags if the shape changes,
+letting you fall back to running without `-m`.
 
 ```bash
 codex debug models              # refreshes from the remote catalog
@@ -161,10 +192,15 @@ codex debug models \
   | jq -r '[.models[] | select(.visibility=="list")] | sort_by(.priority) | .[0].slug'
 ```
 
-Effort levels, weakest to strongest: `low`, `medium`, `high`, `xhigh`, `max`,
-`ultra` (`ultra` adds automatic task delegation). Support varies by model — an
-observed catalog had the top two models supporting all six while older ones
-stopped at `xhigh` — so validate before passing one:
+Effort levels, weakest to strongest: `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max`, `ultra` (`ultra` adds automatic task delegation).
+
+This vocabulary **diverges from the published docs**, which document
+`minimal | low | medium | high | xhigh` and no `max`/`ultra`. Conversely
+`minimal` appears in the docs but is supported by no model in the observed
+catalog. Support also varies by model — in one observed catalog the top two
+supported all of `low`…`ultra`, the third stopped at `max`, and older ones
+stopped at `xhigh`. Validate before passing one:
 
 ```bash
 codex debug models | jq -r --arg m "gpt-5.6-sol" \
@@ -199,41 +235,65 @@ so strings generally need quotes that survive your shell.
 | `-c 'sandbox_permissions=["disk-full-read-access"]'` | Fine-grained sandbox permissions. |
 
 In plain mode the stderr header echoes the effective model, sandbox, approval
-mode, reasoning effort, and session id. Read it to confirm an override actually
-landed — unrecognized `-c` keys are otherwise accepted silently, which
-`--strict-config` converts into an error. Note that `--json` suppresses this
-header entirely.
+policy, reasoning effort, and session id. Read it to confirm an override
+actually landed — unrecognized `-c` keys are otherwise accepted silently, which
+`--strict-config` converts into an error.
 
 ## Authentication
 
 `codex exec` reuses saved CLI auth by default; `codex login status` exits `0`
 when credentials exist, which makes it a usable precondition check.
 
-`CODEX_API_KEY` overrides auth for a single invocation and is supported **only**
-on `codex exec`:
+`CODEX_API_KEY` overrides auth for a single invocation. Upstream documents it as
+intended for `codex exec`; the binary resolves it as part of a general auth
+chain alongside `OPENAI_API_KEY` and `CODEX_ACCESS_TOKEN`, so don't rely on it
+being scoped to `exec`.
 
 ```bash
-CODEX_API_KEY=<key> codex exec --json "<task>" < /dev/null
+CODEX_API_KEY="$MY_CODEX_KEY" codex exec --json "<task>" < /dev/null
 ```
 
-Set it inline for the one command rather than exporting it job-wide. Anything
-else running in that process environment — build scripts, tests, dependency
-lifecycle hooks — can read an exported key. In GitHub Actions, prefer
+Set it inline for the one command rather than exporting it job-wide — and the
+same applies to `OPENAI_API_KEY`. Anything else running in that process
+environment (build scripts, tests, dependency lifecycle hooks, a compromised
+action) can read an exported key. In GitHub Actions, prefer
 [`openai/codex-action`](https://github.com/openai/codex-action), which proxies
 the key instead of exposing it to job steps.
 
-## Documented flags that don't exist here
+## Diagnosing a broken environment
 
-The published docs describe a build that differs from 0.144.1. These are
-rejected as unexpected arguments on `codex exec`:
+When a run fails for environmental rather than logical reasons — missing auth,
+bad config, no Git repo — `codex doctor` reports on installation, config, auth,
+runtime, Git, and terminal health in one pass. Reach for it before re-running a
+failing command with different flags.
 
-| Flag | Status | What to do instead |
-|---|---|---|
-| `-a, --ask-for-approval` | Not present | `exec` is non-interactive; the sandbox is the only control. |
-| `--search` | Not present | No `exec`-level web search toggle on this build. |
+## Global flags that don't propagate to `exec`
 
-`--full-auto` is present but deprecated (warns, then behaves as
-`workspace-write`).
+These exist on the top-level `codex` command but are **rejected as unexpected
+arguments** on `codex exec`. The docs say global flags mostly propagate, "see
+the relevant command help for exceptions" — these are those exceptions, not a
+version mismatch:
+
+| Flag | On `codex` | On `codex exec` | Use instead |
+|---|---|---|---|
+| `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
+| `--search` | Yes | **Rejected** | `-c web_search='"live"'` — see below. |
+
+**Web search isn't off under `exec`.** The `web_search` config defaults to
+`"cached"`, so cached retrieval is already active; `-c web_search='"live"'`
+switches to live browsing. A full-access sandbox defaults it to `"live"` on its
+own, so `danger-full-access` silently enables live web retrieval too.
+
+### Hidden flags
+
+Some accepted flags don't appear in `--help`, so `--help` proves a flag exists
+but never proves one doesn't:
+
+| Flag | Notes |
+|---|---|
+| `--full-auto` | Deprecated; warns, then applies `workspace-write`. It also forces `approval: never`, which plain `-s workspace-write` does not. |
+| `--yolo` | Alias for `--dangerously-bypass-approvals-and-sandbox`. Worth recognizing in someone else's script. |
+| `--experimental-json` | Alias for `--json`. |
 
 ## Exit codes and failure modes
 
@@ -243,8 +303,10 @@ rejected as unexpected arguments on `codex exec`:
 - **Outside a Git repository** — *"Not inside a trusted directory and `--skip-git-repo-check` was not specified."*
 - **Required MCP server fails to initialize** — a server configured `required = true` aborts the run rather than continuing degraded.
 
-Because a failed run leaves **stdout empty**, treat an empty final message as a
-failure signal and read stderr for the reason:
+In **plain mode** a failed run leaves stdout empty, so an empty final message is
+a failure signal. This does *not* hold under `--json`, where the same failure
+produces a well-formed event stream and a silent stderr — see
+`json-events.md`. The exit code is the reliable check in both modes:
 
 ```bash
 if ! codex exec -s read-only "<task>" < /dev/null > out.md 2> err.log; then

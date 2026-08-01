@@ -31,6 +31,7 @@ item events in between:
 | `thread.started` | Carries `thread_id` — the session id you pass to `codex exec resume`. |
 | `turn.started` | Turn beginning. |
 | `item.started` | An item began. Long-running items (commands, file changes) emit this first. |
+| `item.updated` | An in-progress item changed. Safe to ignore for most parsing. |
 | `item.completed` | An item finished. Carries the full payload — this is the line worth parsing. |
 | `turn.completed` | Success, with a `usage` object. |
 | `turn.failed` | Failure. |
@@ -107,11 +108,19 @@ truncate before putting it in context.
  "changes":[{"path":"/abs/path/calc.py","kind":"update"}]}
 ```
 
-The published docs also list **reasoning**, **MCP tool call**, **web search**,
-and **plan/todo update** items. These weren't observed in the sample runs —
-reasoning items in particular depend on `reasoning summaries` being enabled
-(the run header reports it as `none` by default). Treat their exact field names
-as unconfirmed and inspect a real stream before depending on them.
+**`error`** — a failure surfaced as an item, in addition to any top-level
+`error` / `turn.failed` event. Treat it as run failure:
+
+```json
+{"id":"item_0","type":"error","message":"Model metadata for `zzz` not found. …"}
+```
+
+The types **`reasoning`**, **`mcp_tool_call`**, **`web_search`**, and
+**`todo_list`** also exist in this build, but weren't exercised by the sample
+runs — reasoning items in particular depend on `reasoning summaries` being
+enabled (the header reports it as `none` by default). The names are real; treat
+their exact *field* shapes as unconfirmed and inspect a live stream before
+depending on them.
 
 ## Parsing recipes
 
@@ -128,10 +137,12 @@ jq -r 'select(.type=="item.completed" and .item.type=="command_execution")
        | "[\(.item.exit_code)] \(.item.command)"' run.jsonl
 ```
 
-Files touched:
+Files touched — note the `item.completed` guard, without which every change is
+reported twice, once from `item.started` and once from `item.completed`:
 
 ```bash
-jq -r 'select(.item.type=="file_change") | .item.changes[] | "\(.kind) \(.path)"' run.jsonl
+jq -r 'select(.type=="item.completed" and .item.type=="file_change")
+       | .item.changes[] | "\(.kind) \(.path)"' run.jsonl
 ```
 
 Did any command fail?
@@ -169,6 +180,18 @@ jq -e 'select(.type=="turn.failed" or .type=="error")' run.jsonl > /dev/null \
   && echo "run failed"
 ```
 
-Note that a hard failure (bad model, auth problem) may produce plain `ERROR:`
-lines on **stderr** with an empty stdout, so a zero-length event file is itself
-a failure signal. The process exit code remains the most reliable check.
+**Don't treat an empty event file as the failure signal.** That heuristic holds
+only in plain mode. Under `--json` the same hard failure (bad model, auth
+problem) produces a *well-formed* stream and a silent stderr — the error arrives
+as events, not as `ERROR:` lines:
+
+```jsonl
+{"type":"thread.started","thread_id":"019fb9cf-…"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `zzz` not found. …"}}
+{"type":"turn.started"}
+{"type":"error","message":"{\"type\":\"error\",\"status\":400,…}"}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,…}"}}
+```
+
+So the `turn.failed or error` check above is the right test in JSON mode, and
+the process exit code remains the most reliable check in either mode.

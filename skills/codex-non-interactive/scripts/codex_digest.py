@@ -3,7 +3,7 @@
 
 Raw JSONL from a real Codex run is long and mostly noise: progress narration,
 full command output, duplicated started/completed pairs. Reading it directly
-wastes context. This prints what you actually need to judge the run — what it
+wastes context. This prints what you actually need to judge the run -- what it
 ran, what it changed, what it concluded, what it cost.
 
 Usage:
@@ -11,15 +11,17 @@ Usage:
     codex exec --json "<task>" < /dev/null | python3 codex_digest.py
 
 Options:
-    --full-output   Don't truncate captured command output.
+    --full-output   Include output for successful commands, and don't truncate.
+                    (Failed commands always show output, truncated by default.)
     --json          Emit the digest as JSON instead of text.
 
 Exit status is 0 only for a run that reached `turn.completed` without errors.
-A failed run, or one whose stream was cut off (timeout, kill), exits 1 — so it
+A failed run, or one whose stream was cut off (timeout, kill), exits 1 -- so it
 can gate a pipeline directly.
 """
 
 import argparse
+import io
 import json
 import sys
 
@@ -32,8 +34,10 @@ OUTPUT_LINE_CHARS = 200
 def parse_stream(lines):
     """Fold a JSONL event stream into a digest dict.
 
-    Malformed lines are collected rather than raised on: a truncated run (killed
+    Malformed lines are counted rather than raised on: a truncated run (killed
     by a timeout, say) is exactly when you most want to see the partial digest.
+    Payload shapes are checked with isinstance for the same reason -- a stream
+    that half-matches expectations should degrade, not crash.
     """
     d = {
         "thread_id": None,
@@ -45,7 +49,8 @@ def parse_stream(lines):
         "failed": False,
         "errors": [],
         "malformed_lines": 0,
-        "other_items": [],
+        "other_items": {},
+        "in_flight": [],
     }
 
     for line in lines:
@@ -67,10 +72,12 @@ def parse_stream(lines):
             d["thread_id"] = event.get("thread_id")
         elif etype == "turn.completed":
             d["completed"] = True
-            d["usage"] = event.get("usage")
+            # A later turn without usage must not erase usage already seen
+            # (resumed sessions emit more than one turn).
+            if isinstance(event.get("usage"), dict):
+                d["usage"] = event["usage"]
         elif etype == "turn.failed":
             d["failed"] = True
-            # Shape of the failure payload isn't guaranteed; keep it verbatim.
             if event.get("error") is not None:
                 d["errors"].append(event["error"])
         elif etype == "error":
@@ -79,8 +86,22 @@ def parse_stream(lines):
         elif etype == "item.completed":
             # Only completed items carry full payloads; item.started duplicates
             # them with null exit codes and empty output.
-            _collect_item(d, event.get("item") or {})
+            item = event.get("item")
+            if isinstance(item, dict):
+                _collect_item(d, item)
+            else:
+                d["malformed_lines"] += 1
+        elif etype == "item.started":
+            # Tracked only so a truncated run can show what was in flight when
+            # it died -- otherwise an INCOMPLETE digest reports "Commands: 0".
+            item = event.get("item")
+            if isinstance(item, dict):
+                label = item.get("command") or item.get("type") or "?"
+                d["in_flight"].append({"id": item.get("id"), "label": str(label)})
 
+    # Anything that also completed is no longer in flight.
+    done = {c.get("id") for c in d["commands"]} | {f.get("id") for f in d["file_changes"]}
+    d["in_flight"] = [s for s in d["in_flight"] if s["id"] not in done]
     return d
 
 
@@ -89,26 +110,39 @@ def _collect_item(d, item):
 
     if itype == "agent_message":
         text = item.get("text")
-        if text:
+        # Keep empty strings: an empty final message must not silently promote
+        # an earlier progress note to "the answer".
+        if isinstance(text, str):
             d["messages"].append(text)
     elif itype == "command_execution":
         d["commands"].append(
             {
-                "command": item.get("command", ""),
+                "id": item.get("id"),
+                "command": str(item.get("command", "")),
                 "exit_code": item.get("exit_code"),
-                "output": item.get("aggregated_output", ""),
+                "output": item.get("aggregated_output") or "",
             }
         )
     elif itype == "file_change":
-        for change in item.get("changes") or []:
-            d["file_changes"].append(
-                {"path": change.get("path", ""), "kind": change.get("kind", "?")}
-            )
-    elif itype:
-        # Item types this build emits that the script doesn't model yet
-        # (reasoning, mcp_tool_call, web_search, plan updates). Surfacing the
-        # count beats silently dropping them.
-        d["other_items"].append(itype)
+        changes = item.get("changes")
+        if isinstance(changes, list):
+            for change in changes:
+                if isinstance(change, dict):
+                    d["file_changes"].append(
+                        {
+                            "id": item.get("id"),
+                            "path": str(change.get("path", "")),
+                            "kind": str(change.get("kind", "?")),
+                        }
+                    )
+    elif itype == "error":
+        d["failed"] = True
+        d["errors"].append(item.get("message") or item)
+    elif isinstance(itype, str):
+        # Item types this build emits that the digest doesn't model
+        # (reasoning, mcp_tool_call, web_search, todo_list). Counting them
+        # beats silently dropping them.
+        d["other_items"][itype] = d["other_items"].get(itype, 0) + 1
 
 
 def truncate_output(text, full=False):
@@ -117,25 +151,35 @@ def truncate_output(text, full=False):
     lines = text.rstrip("\n").split("\n")
     if full:
         return lines
-    shown = [ln[:OUTPUT_LINE_CHARS] for ln in lines[:OUTPUT_HEAD_LINES]]
+    shown = []
+    for ln in lines[:OUTPUT_HEAD_LINES]:
+        shown.append(ln if len(ln) <= OUTPUT_LINE_CHARS else ln[:OUTPUT_LINE_CHARS] + " …[truncated]")
     hidden = len(lines) - OUTPUT_HEAD_LINES
     if hidden > 0:
         shown.append(f"… {hidden} more line(s)")
     return shown
 
 
-def render(d, full_output=False):
-    out = []
-    failed_cmds = [c for c in d["commands"] if c["exit_code"] not in (0, None)]
-
-    # A stream with neither turn.completed nor turn.failed was cut off — killed
+def status_of(d):
+    # A stream with neither turn.completed nor turn.failed was cut off -- killed
     # by a timeout, or still running. Reporting that as success is the most
     # dangerous thing this script could do, so it gets its own status.
     if d["failed"]:
-        status = "FAILED"
-    elif d["completed"]:
-        status = "completed"
-    else:
+        return "FAILED"
+    if d["completed"]:
+        return "completed"
+    return "INCOMPLETE"
+
+
+def render(d, full_output=False):
+    out = []
+    # exit_code None means the command never reported one (interrupted), which
+    # is not success -- count it separately rather than letting it read as fine.
+    failed_cmds = [c for c in d["commands"] if c["exit_code"] not in (0, None)]
+    unfinished_cmds = [c for c in d["commands"] if c["exit_code"] is None]
+
+    status = status_of(d)
+    if status == "INCOMPLETE":
         status = "INCOMPLETE — no turn.completed event (run truncated, killed, or still in progress)"
     out.append(f"=== Codex run: {status} ===")
     if d["thread_id"]:
@@ -145,22 +189,26 @@ def render(d, full_output=False):
         out.append("")
         out.append("Errors:")
         for err in d["errors"]:
-            out.append(f"  {json.dumps(err) if not isinstance(err, str) else err}")
+            out.append(f"  {err if isinstance(err, str) else json.dumps(err)}")
 
     out.append("")
-    out.append(
-        f"Commands: {len(d['commands'])} ({len(failed_cmds)} non-zero)   "
-        f"Files changed: {len(d['file_changes'])}   "
-        f"Messages: {len(d['messages'])}"
+    counts = (
+        f"Commands: {len(d['commands'])} ({len(failed_cmds)} non-zero"
+        + (f", {len(unfinished_cmds)} unfinished" if unfinished_cmds else "")
+        + f")   Files changed: {len(d['file_changes'])}   Messages: {len(d['messages'])}"
     )
+    out.append(counts)
     if d["other_items"]:
-        counts = {}
-        for name in d["other_items"]:
-            counts[name] = counts.get(name, 0) + 1
-        summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(d["other_items"].items()))
         out.append(f"Other items: {summary}")
     if d["malformed_lines"]:
         out.append(f"WARNING: {d['malformed_lines']} unparseable line(s) — stream may be truncated.")
+
+    if d["in_flight"]:
+        out.append("")
+        out.append("--- Still in flight when the stream ended ---")
+        for started in d["in_flight"]:
+            out.append(f"  {started['label']}")
 
     if d["file_changes"]:
         out.append("")
@@ -173,25 +221,24 @@ def render(d, full_output=False):
         out.append("--- Commands ---")
         for cmd in d["commands"]:
             code = cmd["exit_code"]
-            marker = " " if code in (0, None) else "!"
-            out.append(f"{marker} [{code}] {cmd['command']}")
-            # Only expand output for failures; successful command output is
-            # rarely why you're reading a digest.
-            if marker == "!":
+            marker = " " if code == 0 else "!"
+            out.append(f"{marker} [{'--' if code is None else code}] {cmd['command']}")
+            # Failures always show output; successes only with --full-output,
+            # since successful command output is rarely why you read a digest.
+            if marker == "!" or full_output:
                 for ln in truncate_output(cmd["output"], full_output):
                     out.append(f"      {ln}")
 
     out.append("")
+    out.append("--- Final message ---")
     if d["messages"]:
         # Only the last agent_message is the result. The earlier ones are
         # progress narration and read deceptively like conclusions.
-        out.append("--- Final message ---")
-        out.append(d["messages"][-1])
+        out.append(d["messages"][-1] or "(empty)")
         if len(d["messages"]) > 1:
             out.append("")
             out.append(f"({len(d['messages']) - 1} earlier progress message(s) omitted)")
     else:
-        out.append("--- Final message ---")
         out.append("(none — the run produced no agent message, which usually means it failed)")
 
     if d["usage"]:
@@ -209,16 +256,43 @@ def render(d, full_output=False):
     return "\n".join(out)
 
 
+def as_json(d, full_output=False):
+    """JSON form of the digest.
+
+    Command output is truncated here too unless --full-output is passed --
+    otherwise this returns the raw noise the script exists to remove.
+    """
+    payload = dict(d)
+    payload["status"] = status_of(d)
+    payload["final_message"] = d["messages"][-1] if d["messages"] else None
+    payload["commands"] = [
+        {**c, "output": "\n".join(truncate_output(c["output"], full_output))} for c in d["commands"]
+    ]
+    if not full_output:
+        # Narration is available via the text renderer's count; carrying every
+        # progress message defeats the point of a digest.
+        payload["messages"] = d["messages"][-1:]
+        payload["omitted_messages"] = max(0, len(d["messages"]) - 1)
+    return payload
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("file", nargs="?", help="JSONL file; reads stdin when omitted")
-    ap.add_argument("--full-output", action="store_true", help="don't truncate command output")
+    ap.add_argument(
+        "--full-output",
+        action="store_true",
+        help="include output for successful commands, and don't truncate",
+    )
     ap.add_argument("--json", dest="as_json", action="store_true", help="emit digest as JSON")
     args = ap.parse_args()
 
     if args.file:
         try:
-            with open(args.file, encoding="utf-8") as fh:
+            # errors="replace": a run killed mid-write can split a multi-byte
+            # character, and crashing on that defeats the whole point of
+            # digesting a truncated stream.
+            with open(args.file, encoding="utf-8", errors="replace") as fh:
                 digest = parse_stream(fh)
         except OSError as exc:
             print(f"error: cannot read {args.file}: {exc}", file=sys.stderr)
@@ -226,15 +300,14 @@ def main():
     else:
         if sys.stdin.isatty():
             ap.error("no input: pass a file or pipe `codex exec --json` output")
-        digest = parse_stream(sys.stdin)
+        stream = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+        digest = parse_stream(stream)
 
     if args.as_json:
-        digest["final_message"] = digest["messages"][-1] if digest["messages"] else None
-        print(json.dumps(digest, indent=2))
+        print(json.dumps(as_json(digest, args.full_output), indent=2))
     else:
         print(render(digest, full_output=args.full_output))
 
-    # Incomplete counts as failure: a truncated run must not gate a pipeline green.
     return 0 if digest["completed"] and not digest["failed"] else 1
 
 
