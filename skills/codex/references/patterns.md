@@ -36,16 +36,20 @@ interleaved, half-applied changes that are far more expensive to untangle than
 the setup cost here.
 
 ```bash
-git worktree add /tmp/codex-wt -b codex/fix-parser
+# Record the fork point. `git worktree add` branches from HEAD, so diffing
+# against `main` later would fold your own unmerged commits into the patch —
+# and `git apply --check` does not catch that.
+BASE=$(git rev-parse HEAD)
+git worktree add /tmp/codex-wt -b codex/fix-parser "$BASE"
 codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
   -c sandbox_workspace_write.network_access=true \
   "Fix the failing test in tests/test_parser.py. Run 'pytest tests/test_parser.py'
    until it passes. Change only src/parser.py." \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 
-git -C /tmp/codex-wt diff main          # modified files
+git -C /tmp/codex-wt diff "$BASE"       # modified files, vs the fork point
 git -C /tmp/codex-wt status --short     # AND files Codex created — diff won't show them
-git -C /tmp/codex-wt log --oneline main..HEAD
+git -C /tmp/codex-wt log --oneline "$BASE"..HEAD
 ```
 
 To adopt the work, cherry-pick or apply the diff — don't merge blindly:
@@ -55,7 +59,7 @@ To adopt the work, cherry-pick or apply the diff — don't merge blindly:
 # binary content. Plain `git diff main` silently omits both, so a patch built
 # without these loses every file Codex created — with no error.
 git -C /tmp/codex-wt add -N .
-git -C /tmp/codex-wt diff --binary main > /tmp/codex.patch
+git -C /tmp/codex-wt diff --binary "$BASE" > /tmp/codex.patch
 git apply --check /tmp/codex.patch && git apply /tmp/codex.patch
 ```
 
@@ -126,8 +130,12 @@ you invoke it in. Note that `cd`-ing into the worktree does **not** give you
 `read-only`: a worktree resolves to its main repo's root, which stage 1 just
 marked trusted. Set the sandbox explicitly rather than relying on location.
 
-Note that a `workspace-write` stage 2 permanently trusts this repo's root, so
-later bare runs here default to `workspace-write`. Use `read-only` for stage 2
+**A write-enabled resume cannot be isolated.** `resume` has neither `-s` nor
+`-C`, so stage 2 writes into whatever directory you invoke it from — you cannot
+point it at a worktree. If you are also editing that repo, don't give stage 2
+write access at all; do the analysis via resume and apply the change yourself.
+It also permanently trusts this repo's root, so later bare runs here default to
+`workspace-write`. Use `read-only` for stage 2
 whenever the follow-up doesn't actually need to write.
 
 Because nothing carries, set the sandbox explicitly on *every* resume:

@@ -79,8 +79,9 @@ def parse_stream(lines):
 
         if etype == "turn.started":
             # A new turn reopens the run: a stream cut during turn 2 must not
-            # inherit turn 1's completion.
+            # inherit turn 1's completion, nor its failure.
             d["completed"] = False
+            d["failed"] = False
         elif etype == "thread.started":
             tid = event.get("thread_id")
             d["thread_id"] = tid if isinstance(tid, str) else None
@@ -293,11 +294,22 @@ def render(d, full_output=False):
     if d["unmodeled_lines"]:
         out.append(f"Note: {d['unmodeled_lines']} event(s) in an unrecognized shape were skipped.")
 
-    if d["in_flight"] and status_of(d) != "completed":
+    if d["in_flight"]:
+        # Always shown: a command that started and never completed is the whole
+        # reason this is tracked, and it matters most on a run that otherwise
+        # looks clean. Non-command items are summarised by type, since their
+        # label is just the type name and would read as noise.
+        cmds = [s for s in d["in_flight"] if s["type"] == "command_execution"]
+        others = {}
+        for s2 in d["in_flight"]:
+            if s2["type"] != "command_execution":
+                others[s2["type"]] = others.get(s2["type"], 0) + 1
         out.append("")
-        out.append("--- Started but never completed ---")
-        for started in d["in_flight"]:
+        out.append("--- Started, no completion seen ---")
+        for started in cmds:
             out.append(f"  {started['label']}")
+        if others:
+            out.append("  " + ", ".join(f"{v}x {k}" for k, v in sorted(others.items())))
 
     if d["file_changes"]:
         out.append("")
@@ -354,6 +366,7 @@ def as_json(d, full_output=False):
     payload = dict(d)
     payload["status"] = status_of(d)
     payload["final_message"] = d["messages"][-1] if d["messages"] else None
+    payload["in_flight"] = [{"type": i["type"], "label": i["label"]} for i in d["in_flight"]]
     payload["commands"] = [
         {**c, "output": "\n".join(truncate_output(c["output"], full_output))} for c in d["commands"]
     ]

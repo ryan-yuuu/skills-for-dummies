@@ -94,7 +94,8 @@ codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "<t
 ```
 
 `--full-auto` still parses but warns: *"`--full-auto` is deprecated; use
-`--sandbox workspace-write` instead."* Use the explicit flag.
+`--sandbox workspace-write` instead."* Prefer the explicit flag — but note the
+two are **not** equivalent; see [Hidden flags](#hidden-flags).
 
 ### Model and configuration
 
@@ -190,6 +191,10 @@ Runs a code review scoped to a review target. Targets are mutually exclusive:
 | *(bare `PROMPT`)* | Custom review instructions. |
 
 All four targets are mutually exclusive at parse time — any pair errors out.
+
+`review` writes a project trust entry like any other run whose sandbox resolves
+non-`read-only`, so pin `-c sandbox_mode='"read-only"'` unless it genuinely
+needs to write.
 
 `--title <TITLE>` is only half-enforced: used alone it hard-errors demanding
 `--commit`, but combined with `--base` or `--uncommitted` it parses cleanly and
@@ -339,7 +344,7 @@ version mismatch:
 | Flag | On `codex` | On `codex exec` | Use instead |
 |---|---|---|---|
 | `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
-| `--search` | Yes | **Rejected** | Search is already on; `-c web_search='"disabled"'` is the toggle that changes anything — see below. |
+| `--search` | Yes | **Rejected** | `web_search` is a config key, but what it does depends on the model — see below before relying on it. |
 
 **`web_search` behaves differently depending on the model**, which makes it
 easy to reason about wrongly. Values: `disabled`, `cached` (the default),
