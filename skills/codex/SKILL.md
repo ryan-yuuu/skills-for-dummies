@@ -30,8 +30,8 @@ Two facts shape everything below:
 
 - **It runs autonomously.** `codex exec` has no approval prompts, so nobody is
   standing between Codex and your filesystem except the sandbox you choose. (The
-  run header still prints an `approval:` line — it reflects config, not
-  behavior. Ignore it.)
+  header's `approval:` line always reads `never` under `exec` regardless of
+  config, so it carries no information. Ignore it.)
 - **It starts cold.** Codex sees none of your conversation. Whatever context you
   don't put in the prompt does not exist.
 
@@ -107,6 +107,12 @@ Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
 rejected at parse time — so `if ! codex exec ...` works, and a `2` means you
 passed something that subcommand doesn't accept.
 
+`resume` has a silent-success trap: an unknown thread *name*, or `--last` in a
+directory with no sessions, starts a **fresh, context-free session and exits
+`0`**. Only a well-formed but unknown UUID fails loudly. So a stage 2 that lost
+all of stage 1's context reports success — assert the resumed thread id rather
+than trusting the exit code.
+
 One more way to hang: `-i/--image` is **variadic**, so
 `codex exec -i pic.png "do the thing"` consumes the prompt as a second image
 path and then blocks reading stdin. Put `-i` after the prompt, or separate with
@@ -117,9 +123,8 @@ path and then blocks reading stdin. Put `-i` after the prompt, or separate with
 Leaving these to their defaults is the quietest way to get mediocre results,
 because **both defaults are lower than you would guess**:
 
-- The **model** comes from the user's `config.toml`, which is frequently an
-  older release than the best one available. An observed default was several
-  ranks down the catalog while a stronger model sat unused.
+- The **model** comes from the user's `config.toml` when set there, so it's
+  whatever they last chose rather than whatever is currently strongest.
 - The **reasoning effort** comes from the model's own
   `default_reasoning_level`, and for the current top model that value is
   **`low`**. A frontier model at `low` effort will underperform a weaker model
@@ -192,6 +197,10 @@ model: gpt-5.6-sol
 sandbox: read-only
 reasoning effort: xhigh
 ```
+
+With effort unset the header reads `reasoning effort: none` even though the
+request still carries the catalog default — so the header confirms *explicit*
+overrides, not the effective value.
 
 **`--json` suppresses that header, and the event stream carries no model or
 effort fields** — verified: a `--json` run's entire stderr was one line
@@ -267,18 +276,30 @@ safety boundary**. Choose the least privilege that lets the task finish:
 | `workspace-write` | Also write inside the workspace | Delegated implementation, refactors, fixes |
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
 
-**Always pass `-s` — the default is not what you think.** The built-in default
-is `read-only`, but user config overrides it, and *project trust* is part of
-that config. Verified: the same `codex exec` command with no `-s` reports
-`sandbox: read-only` in an untrusted directory and
-`sandbox: workspace-write` inside a project recorded as
-`trust_level = "trusted"` in `~/.codex/config.toml`. Users accumulate trusted
-projects just by working in them.
+**Always pass `-s` — the default is not what you think, and running Codex
+changes it.** The built-in default is `read-only`, but *project trust* overrides
+it: in a directory recorded as `trust_level = "trusted"` in
+`$CODEX_HOME/config.toml`, a bare `codex exec` reports
+`sandbox: workspace-write`.
 
-So an omitted `-s` means a delegated "just answer this question" can arrive
-holding write access to the user's repository. `--ignore-user-config` also
-restores `read-only`, but naming the sandbox you want is clearer than relying on
-that side effect.
+Codex writes those trust entries **itself**. Any run whose sandbox resolves to
+something other than `read-only` — via `-s`, `-c sandbox_mode`, config,
+`--full-auto`, or `--yolo` — appends a trust entry for the workdir, permanently
+raising the default for every later run there. Verified on a fresh
+`CODEX_HOME` and a fresh repo: one `-s workspace-write` run that *failed at the
+API* still wrote the entry, after which a plain `codex exec` with no `-s`
+resolved to `workspace-write`. Neither `--ephemeral` nor `--ignore-user-config`
+prevents the write.
+
+The consequence is direct: **delegating one implementation task permanently
+escalates the default for that repository.** So a later "just answer this
+question", delegated without `-s`, arrives holding write access. Passing `-s`
+explicitly on every call is the whole defense.
+
+Trust matches the **git repo root** of the effective workdir, exactly — a nested
+repo inside a trusted repo is not trusted, a subdirectory is, and a worktree of
+a trusted repo inherits it. `-C/--cd` decides which directory is checked, not
+your shell's cwd.
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
 answer when `workspace-write` is *almost* enough — reach for it instead of

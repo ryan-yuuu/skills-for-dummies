@@ -65,6 +65,10 @@ git branch -D codex/fix-parser
 worktree. Without it, `-s workspace-write` applies to wherever you invoked the
 command.
 
+Note that this run permanently trusts `/tmp/codex-wt` — codex records a trust
+entry for any workdir whose sandbox isn't `read-only`, so later bare runs there
+default to `workspace-write`. Removing the worktree doesn't remove the entry.
+
 `sandbox_workspace_write.network_access=true` is there because
 **`workspace-write` blocks network by default** — without it, any test run that
 resolves a hostname or fetches a dependency fails, and `exec` has no approval
@@ -123,8 +127,14 @@ codex exec resume --last "now write a test that would have caught it" < /dev/nul
 ```
 
 Prefer an explicit session id in scripts. `--last` is ambient state — it depends
-on what else has run in that directory, which makes it a poor fit for anything
-reproducible.
+on what else has run in that directory — and worse, when there is nothing to
+resume it silently starts a **fresh, context-free session and exits `0`**. The
+same applies to an unknown thread name. Assert you got the session you meant:
+
+```bash
+RESUMED=$(jq -r 'select(.type=="thread.started") | .thread_id' stage2.jsonl)
+[ "$RESUMED" = "$SESSION" ] || { echo "resume started a NEW session — context lost"; exit 1; }
+```
 
 ## Feeding data through stdin
 

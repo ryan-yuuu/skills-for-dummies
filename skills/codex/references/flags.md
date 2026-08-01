@@ -55,8 +55,22 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | Project with `trust_level = "trusted"` in `~/.codex/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
 | Any directory, with `--ignore-user-config` | `read-only` |
 
-Trust entries accumulate as users work in projects, so this is the common case
-on a developer machine rather than an exotic one. Always pass `-s` explicitly.
+**Codex writes the trust entry itself.** Any run whose sandbox resolves to
+something other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
+`--full-auto`, `--yolo`) appends `[projects."<workdir>"] trust_level =
+"trusted"` to `$CODEX_HOME/config.toml`. Verified on a fresh `CODEX_HOME` and a
+fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
+and the next bare `codex exec` then resolved to `workspace-write`. **Neither
+`--ephemeral` nor `--ignore-user-config` prevents the write** — they change what
+a run reads, not what it records.
+
+So delegating a single implementation task permanently raises the default for
+that repository. Always pass `-s` explicitly.
+
+Trust is matched by **exact git repo root** of the effective workdir: a nested
+repo inside a trusted repo is *not* trusted, a subdirectory of one is, a
+worktree of a trusted repo inherits trust, and `-C/--cd` selects the directory
+that gets checked. Trust does not relax the network block.
 
 **`workspace-write` blocks network access by default.** Verified with
 `codex sandbox`: `curl` under `workspace-write` couldn't resolve DNS, and
@@ -138,6 +152,12 @@ on each resume if you want them held steady.
 
 Resuming requires a persisted session, so a run started with `--ephemeral`
 cannot be resumed.
+
+**`resume` can silently start a fresh session.** An unknown thread *name*, or
+`--last` where the directory has no sessions, begins a new context-free session
+and exits `0` — only a well-formed but unknown UUID exits `1`. Assert the
+resumed `thread_id` rather than relying on the exit code, or stage 2 will look
+successful while having lost everything stage 1 learned.
 
 ## `codex exec review`
 
@@ -258,9 +278,8 @@ nonsense key, and without that flag it is accepted and silently does nothing.
 Unrecognized `-c` keys are accepted silently; `--strict-config` turns that into
 an error. To confirm an override landed, read the stderr header — see
 [Model selection and reasoning effort](#model-selection-and-reasoning-effort),
-which also covers the `--json` caveat. Note that the header's `approval:` line
-reflects config rather than the effective policy: `exec` injects `never`
-regardless, since nothing can approve.
+which also covers the `--json` caveat. Note that the header's `approval:` line always reads `never` under `exec`,
+whatever the config says, so it carries no information.
 
 ## Authentication
 
@@ -316,7 +335,7 @@ but never proves one doesn't:
 
 | Flag | Notes |
 |---|---|
-| `--full-auto` | Deprecated; warns, then applies `workspace-write`. It also forces `approval: never`, which plain `-s workspace-write` does not. |
+| `--full-auto` | Deprecated; warns, then applies `workspace-write`. Under `exec` the only observable difference from `-s workspace-write` is the warning. |
 | `--yolo` | Alias for `--dangerously-bypass-approvals-and-sandbox`. Worth recognizing in someone else's script. |
 | `--experimental-json` | Alias for `--json`. |
 

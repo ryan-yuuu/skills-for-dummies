@@ -53,6 +53,7 @@ def parse_stream(lines):
         "completed": False,
         "failed": False,
         "errors": [],
+        "warnings": [],
         "malformed_lines": 0,
         "other_items": {},
         "in_flight": [],
@@ -181,8 +182,10 @@ def _collect_item(d, item):
                         }
                     )
     elif itype == "error":
-        d["failed"] = True
-        d["errors"].append(item.get("message") or item)
+        # NOT a run failure: a successful run can carry an item-level error
+        # (e.g. "Model metadata for X not found. Defaulting to fallback").
+        # Only turn.failed and a top-level `error` event decide the status.
+        d["warnings"].append(item.get("message") or item)
     elif isinstance(itype, str):
         # Item types this build emits that the digest doesn't model
         # (reasoning, mcp_tool_call, web_search, todo_list). Counting them
@@ -249,6 +252,12 @@ def render(d, full_output=False):
         out.append("Errors:")
         for err in d["errors"]:
             out.append(f"  {err if isinstance(err, str) else json.dumps(err)}")
+
+    if d["warnings"]:
+        out.append("")
+        out.append("Warnings (run still completed):")
+        for warn in d["warnings"]:
+            out.append(f"  {warn if isinstance(warn, str) else json.dumps(warn)}")
 
     out.append("")
     counts = (

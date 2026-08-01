@@ -111,8 +111,10 @@ truncate before putting it in context.
  "changes":[{"path":"/abs/path/calc.py","kind":"update"}]}
 ```
 
-**`error`** — a failure surfaced as an item, in addition to any top-level
-`error` / `turn.failed` event. Treat it as run failure:
+**`error`** — a diagnostic item. **Not on its own a run failure**: a run that
+exits `0` with `turn.completed` and a correct answer can still carry one, such
+as a fallback-metadata warning. Decide status from `turn.failed`, a *top-level*
+`error` event, or the exit code:
 
 ```json
 {"id":"item_0","type":"error","message":"Model metadata for `zzz` not found. …"}
