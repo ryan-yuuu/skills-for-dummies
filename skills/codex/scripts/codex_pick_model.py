@@ -75,7 +75,8 @@ def load_catalog(bundled_only=False):
     for bundled in attempts:
         cmd = ["codex", "debug", "models"] + (["--bundled"] if bundled else [])
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=CATALOG_TIMEOUT_S)
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  errors="replace", timeout=CATALOG_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             errs.append(f"`{' '.join(cmd)}` timed out after {CATALOG_TIMEOUT_S}s")
             continue
@@ -94,7 +95,11 @@ def load_catalog(bundled_only=False):
         if not isinstance(payload, dict):
             errs.append(f"catalog is {type(payload).__name__}, expected an object")
             continue
-        models = [m for m in (payload.get("models") or []) if isinstance(m, dict)]
+        raw_models = payload.get("models")
+        if raw_models is not None and not isinstance(raw_models, list):
+            errs.append(f"catalog `models` is {type(raw_models).__name__}, expected a list")
+            continue
+        models = [m for m in (raw_models or []) if isinstance(m, dict)]
         if models:
             if bundled and not bundled_only:
                 print(f"note: using bundled catalog ({errs[0] if errs else 'refresh failed'})", file=sys.stderr)
@@ -113,8 +118,10 @@ def load_catalog(bundled_only=False):
 def selectable(models):
     """Models a user can actually pick.
 
-    `visibility: hide` marks internal entries (e.g. codex-auto-review) that
-    aren't meant to be selected directly.
+    Allowlist: only `visibility: "list"` is selectable, so a novel value like
+    `"beta"` is excluded rather than assumed safe. Falls back to "anything not
+    explicitly hidden" only when NO entry claims `list`, which means the
+    catalog's vocabulary changed.
     """
     # Allowlist, matching the documented rule (`list` selectable, `hide`
     # internal). A denylist would promote internal entries like
@@ -130,13 +137,30 @@ def selectable(models):
     return [m for m in named if m.get("visibility") != "hide"]
 
 
-def _priority_key(model):
-    # Catalogs have shipped priorities as ints; treat anything else as
-    # unranked so a type change degrades to alphabetical instead of crashing.
+def _rank(model):
+    """The model's priority as an int, or None when it genuinely can't rank.
+
+    A catalog shipping `1.0` instead of `1` must not lose to an int `2`:
+    demoting it silently selects a weaker model, which is the failure this
+    script exists to prevent. Int-valued floats are coerced, matching how
+    codex_digest.py treats exit codes. Booleans are excluded because
+    `True == 1` in Python and would otherwise rank as priority 1.
+    """
     priority = model.get("priority")
-    if not isinstance(priority, int) or isinstance(priority, bool):
-        return (10**6, model.get("slug", ""))
-    return (priority, model.get("slug", ""))
+    if isinstance(priority, bool):
+        return None
+    if isinstance(priority, int):
+        return priority
+    if isinstance(priority, float) and priority.is_integer():
+        return int(priority)
+    return None
+
+
+def _priority_key(model):
+    rank = _rank(model)
+    # Unrankable entries sort last, then alphabetically, so ordering stays
+    # deterministic rather than depending on catalog order.
+    return (10**6 if rank is None else rank, model.get("slug", ""))
 
 
 def best_model(models):
@@ -147,8 +171,7 @@ def best_model(models):
     # weaker model than the catalog intends -- e.g. a float 1.0 losing to an
     # int 2 -- which is the exact failure this script exists to prevent.
     unrankable = [m["slug"] for m in pool
-                  if m.get("priority") is not None
-                  and (not isinstance(m.get("priority"), int) or isinstance(m.get("priority"), bool))]
+                  if m.get("priority") is not None and _rank(m) is None]
     if unrankable:
         print(
             f"note: unrankable priority on {', '.join(unrankable)}; treating as lowest rank. "
@@ -275,7 +298,7 @@ def main():
         # Consistent with the default path, which exits 1 on the same catalog.
         return 0 if selectable(models) else 1
 
-    if args.model:
+    if args.model is not None:
         match = next((m for m in selectable(models) if m.get("slug") == args.model), None)
         if match is None:
             available = ", ".join(m["slug"] for m in selectable(models)) or "none"

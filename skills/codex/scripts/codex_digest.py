@@ -13,13 +13,15 @@ Usage:
 Options:
     --full-output   Include output for successful commands, and don't truncate.
                     (Failed commands always show output, truncated by default.)
-    --json          Emit the digest as JSON instead of text. Like the text form,
-                    this truncates command output and keeps only the final
-                    agent message (with `omitted_messages` counting the rest)
-                    unless --full-output is passed.
+    --json          Emit the digest as JSON instead of text. Matches the text
+                    form: truncates command output, keeps only the final agent
+                    message (with `omitted_messages` counting the rest) unless
+                    --full-output is passed, and applies the same visibility
+                    gate to `in_flight`.
 
 Exit status:
-    0   reached `turn.completed` with no errors
+    0   the final turn reached `turn.completed` without failing (errors carried
+        over from a superseded earlier turn do not count)
     1   failed, or the stream was cut off (timeout, kill) -- so it can gate a
         pipeline directly
     2   the input file could not be read, or bad arguments
@@ -123,6 +125,11 @@ def parse_stream(lines):
                 )
             else:
                 d["unmodeled_lines"] += 1
+        elif etype != "item.updated":
+            # `item.updated` is a known no-op for this parser. Anything else is
+            # an envelope type we don't model -- count it rather than dropping
+            # it silently, which is the principle applied to item types below.
+            d["unmodeled_lines"] += 1
 
     # Reconcile started against completed in two passes. Pass 1 matches exact
     # (type, id) so concurrent items of the same type are told apart -- codex
@@ -138,7 +145,7 @@ def parse_stream(lines):
         ident = started["ident"]
         if ident is not None and by_id.get(ident, 0) > 0:
             by_id[ident] -= 1
-            by_type[started["type"]] = by_type.get(started["type"], 1) - 1
+            by_type[started["type"]] = by_type.get(started["type"], 0) - 1
             continue
         survivors.append(started)
     remaining = []
@@ -379,7 +386,12 @@ def as_json(d, full_output=False):
     payload = dict(d)
     payload["status"] = status_of(d)
     payload["final_message"] = d["messages"][-1] if d["messages"] else None
-    payload["in_flight"] = [{"type": i["type"], "label": i["label"]} for i in d["in_flight"]]
+    # Same gate as the text renderer: a hung *command* always matters, but other
+    # item types have unconfirmed completion-event shapes and false-positive on
+    # clean runs. Applying it in only one renderer made the two disagree.
+    visible = [i for i in d["in_flight"]
+               if i["type"] == "command_execution" or status_of(d) != "completed"]
+    payload["in_flight"] = [{"type": i["type"], "label": i["label"]} for i in visible]
     payload["commands"] = [
         {**c, "output": "\n".join(truncate_output(c["output"], full_output))} for c in d["commands"]
     ]
