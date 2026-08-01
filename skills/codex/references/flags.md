@@ -61,19 +61,19 @@ sandbox other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
 the workdir itself outside a repo. Verified: a run with `-C <repo>/sub/deeper`
 wrote `[projects."<repo>"]`.
 
+It happens even on failure: verified on a fresh `CODEX_HOME` and a fresh repo,
+one `-s workspace-write` run that failed at the API still wrote the entry, and
+the next bare `codex exec` resolved to `workspace-write`. **Neither
+`--ephemeral` nor `--ignore-user-config` prevents it** — they change what a run
+reads, not what it records.
+
 **Genuinely resuming a session does not write one.** Verified: `codex exec
 resume <id> -c sandbox_mode='"workspace-write"'` left the config untouched,
 while an otherwise identical plain `codex exec` wrote an entry. The exception is
 telling — a resume that *silently starts fresh* (unknown thread name, or
-`--last` with no session) is creating a session, so it does write one. The trust
+`--last` with no session) is creating a session, so it does write one. A trust
 entry appearing after a resume is therefore a signal that the resume didn't
 resume.
-
-The write happens even on failure: verified on a fresh `CODEX_HOME` and a fresh
-repo, one `-s workspace-write` run that failed at the API still wrote the entry,
-and the next bare `codex exec` resolved to `workspace-write`. **Neither
-`--ephemeral` nor `--ignore-user-config` prevents it** — they change what a run
-reads, not what it records.
 
 So delegating a single implementation task permanently raises the default for
 that repository. Always pass `-s` explicitly.

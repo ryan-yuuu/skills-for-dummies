@@ -194,8 +194,8 @@ codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
 
 ### Choosing an effort level
 
-Levels run `minimal → low → medium → high → xhigh → max → ultra`.
-**Default to `xhigh`** — every model in the observed catalog supports it, and
+Levels run `minimal → low → medium → high → xhigh → max → ultra` (no model in
+the observed catalog supports `minimal`). **Default to `xhigh`** — every model in the observed catalog supports it, and
 it's right for anything worth delegating. Reach past it deliberately: `max` for
 genuinely hard reasoning like subtle concurrency bugs, `ultra` (which lets the
 run delegate sub-tasks of its own) for large open-ended work. Drop to `medium`
@@ -208,8 +208,8 @@ taking, because the expensive failure is not a slow run — it's a fast, confide
 wrong answer you then have to verify and discard.
 
 Confirm what actually took effect. In plain (non-`--json`) mode, the stderr
-header echoes the resolved settings, so a typo'd override shows up rather than
-silently doing nothing:
+header echoes the resolved settings, so an override that *parsed* shows up
+rather than silently doing nothing:
 
 ```
 model: gpt-5.6-sol
@@ -220,9 +220,11 @@ reasoning effort: xhigh
 The header shows the **resolved** value — flag, then `-c`, then the user's
 config — so reading back `xhigh` doesn't prove *your* flag landed if their
 config already said it. `--json` suppresses the header entirely and no event
-carries model or effort, so JSON runs offer nothing to check against. And a
-mistyped `-c` key is accepted silently unless you pass `--strict-config`. Full
-resolution rules in
+carries model or effort, so a JSON run offers nothing to check against — verify
+the flags once with a throwaway plain run, or trust `codex_pick_model.py`, which
+prints exactly what it resolved. And note the header only proves an override was
+*parsed*: a mistyped `-c` key is accepted silently unless you pass
+`--strict-config`. Full resolution rules in
 [`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
 ## Set the bar before you delegate
@@ -313,8 +315,9 @@ invoking Codex where you can, otherwise pass
 neither is safe by default — `resume` re-resolves the sandbox from the current
 directory rather than inheriting the session's, and drops the model and effort
 too. Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
-`-c model_reasoning_effort=` on every resume. Details in
-[`references/flags.md`](references/flags.md#codex-exec-resume).
+`-c model_reasoning_effort=` on every resume. Details:
+[review](references/flags.md#codex-exec-review),
+[resume](references/flags.md#codex-exec-resume).
 
 `--dangerously-bypass-approvals-and-sandbox` removes the boundary entirely.
 Don't use it to make an error message go away; if a task is failing under
@@ -380,8 +383,9 @@ Targets are mutually exclusive: `--uncommitted` (staged + unstaged + untracked),
 **A target flag and a prompt can't be combined**, so you cannot attach
 acceptance criteria to a targeted review — `--base main "cite file and line"`
 is rejected at parse time. When the criteria matter more than the automatic
-scoping, pipe the diff into a plain `codex exec` instead. Do that with a
-throwaway git index, or you will damage the user's staging:
+scoping, either use the bare-prompt form and describe the scope yourself, or
+pipe the diff into a plain `codex exec`. Do the latter with a throwaway git
+index, or you will damage the user's staging:
 [`references/patterns.md`](references/patterns.md#reviewing-a-working-diff).
 
 **Implement** — hand over a scoped task. Needs write access, so isolate first
@@ -495,8 +499,9 @@ Read these as needed rather than up front (`$SKILL_DIR` is set above):
 - **`references/json-events.md`** — the `--json` JSONL event schema, item types,
   and parsing recipes. Read when you need to observe *what Codex did*, not just
   what it concluded.
-- **`references/patterns.md`** — multi-turn `resume`, piping stdin, parallel
-  fan-out, worktree isolation, and CI usage.
+- **`references/patterns.md`** — worktree isolation, multi-turn `resume`,
+  piping stdin, reviewing a working diff, structured output, parallel fan-out,
+  adversarial second opinion, long-running/background execution, and CI usage.
 - **`scripts/codex_pick_model.py`** — resolves the strongest available model and
   a supported effort level from the live catalog, so nothing is hardcoded.
 - **`scripts/codex_digest.py`** — condenses a `--json` event stream into a short
