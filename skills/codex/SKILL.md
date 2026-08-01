@@ -30,9 +30,9 @@ Two facts shape everything below:
 
 - **It runs autonomously.** `codex exec` has no approval prompts, so nobody is
   standing between Codex and your filesystem except the sandbox you choose. The
-  header's `approval:` line echoes the resolved `approval_policy`, so it may
-  read `on-request` — that describes the *setting*, not `exec`'s behavior.
-  Nothing can approve non-interactively regardless of its value.
+  header's `approval:` line is not evidence either way — it usually reads
+  `never`, but echoes the configured policy when `approvals_reviewer` is set.
+  Nothing can approve non-interactively whichever it shows.
 - **It starts cold.** Codex sees none of your conversation. Whatever context you
   don't put in the prompt does not exist.
 
@@ -287,16 +287,19 @@ safety boundary**. Choose the least privilege that lets the task finish:
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
 
 **Always pass `-s` — the default is not what you think, and running Codex
-changes it.** The built-in default is `read-only`, but Codex records
-`trust_level = "trusted"` for any project it runs in with a non-`read-only`
-sandbox, and thereafter a bare `codex exec` there resolves to
-`workspace-write`. The entry is written even when the run fails, and neither
-`--ephemeral` nor `--ignore-user-config` prevents it.
+changes it.** The built-in default is `read-only`, but any run with a
+non-`read-only` sandbox makes Codex record `trust_level = "trusted"` for the
+**git repo root** of its workdir, and a bare `codex exec` there afterwards
+resolves to `workspace-write`. The entry is written even when the run fails, and
+neither `--ephemeral` nor `--ignore-user-config` prevents it.
 
-So **delegating one implementation task permanently escalates the default for
-that repository**, and a later "just answer this question" sent without `-s`
-arrives holding write access. Passing `-s` on every call is the whole defense.
-Matching rules and the verification are in
+Two consequences worth holding onto. **Delegating one implementation task
+permanently escalates the default for the whole repository** — a run in
+`repo/services/api` trusts all of `repo` — so a later "just answer this
+question" sent without `-s` arrives holding write access. And because the key is
+the repo root, **a git worktree does not contain this**: a write-enabled run in
+a worktree trusts the main repository. Passing `-s` on every call is the whole
+defense. Matching rules and verification in
 [`references/flags.md`](references/flags.md#sandbox-and-permissions).
 
 `--add-dir <DIR>` grants write access to extra directories and is the right

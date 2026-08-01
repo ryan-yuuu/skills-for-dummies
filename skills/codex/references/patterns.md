@@ -70,9 +70,17 @@ git branch -D codex/fix-parser
 worktree. Without it, `-s workspace-write` applies to wherever you invoked the
 command.
 
-Note that this run permanently trusts `/tmp/codex-wt` — codex records a trust
-entry for any workdir whose sandbox isn't `read-only`, so later bare runs there
-default to `workspace-write`. Removing the worktree doesn't remove the entry.
+**A worktree does not isolate the trust side effect.** Codex keys trust on the
+*git repo root*, and a worktree shares the main repo's root — so this run writes
+a trust entry for **the main repository**, not for `/tmp/codex-wt`. Verified: a
+`-s workspace-write` run with `-C <worktree>` wrote
+`[projects."<main repo>"]`, after which a bare `codex exec` in the main repo
+resolved to `workspace-write`.
+
+So the worktree protects your *working files* from concurrent edits — which is
+what it's for — but the escalation lands on the real repository and outlives
+`git worktree remove`. Pass `-s` explicitly on every later run there, or delete
+the entry from `$CODEX_HOME/config.toml`.
 
 `sandbox_workspace_write.network_access=true` is there because
 **`workspace-write` blocks network by default** — without it, any test run that
@@ -353,7 +361,7 @@ Each flag addresses a specific CI hazard:
 
 | Flag | Hazard it removes |
 |---|---|
-| `--ignore-user-config` | A developer's `config.toml` silently changing CI behavior |
+| `--ignore-user-config` | A developer's `config.toml` silently changing CI behavior. Note it does **not** stop codex writing a trust entry, so a persistent runner accumulates them across jobs. |
 | `--ignore-rules` | Project execpolicy `.rules` files altering what may run |
 | `--strict-config` | Config keys this build doesn't recognize passing unnoticed |
 | `--ephemeral` | Session files accumulating on the runner |

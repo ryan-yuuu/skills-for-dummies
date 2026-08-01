@@ -57,8 +57,9 @@ piped *and* a prompt argument is present, the piped content is appended as a
 
 **Codex writes the trust entry itself.** Any run whose sandbox resolves to
 something other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
-`--full-auto`, `--yolo`) appends `[projects."<workdir>"] trust_level =
-"trusted"` to `$CODEX_HOME/config.toml`. Verified on a fresh `CODEX_HOME` and a
+`--full-auto`, `--yolo`) appends a trust entry to `$CODEX_HOME/config.toml`
+keyed on the **git repo root** of the workdir — or the workdir itself outside a
+repo. Verified: a run with `-C <repo>/sub/deeper` wrote `[projects."<repo>"]`. Verified on a fresh `CODEX_HOME` and a
 fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
 and the next bare `codex exec` then resolved to `workspace-write`. **Neither
 `--ephemeral` nor `--ignore-user-config` prevents the write** — they change what
@@ -67,14 +68,17 @@ a run reads, not what it records.
 So delegating a single implementation task permanently raises the default for
 that repository. Always pass `-s` explicitly.
 
-Trust is matched by **exact git repo root** of the effective workdir: a nested
-repo inside a trusted repo is *not* trusted, a subdirectory of one is, a
-worktree of a trusted repo inherits trust, and `-C/--cd` selects the directory
-that gets checked. Trust does not relax the network block.
+Matching uses the same rule, so it is symmetric with the write: a nested repo
+inside a trusted repo is *not* trusted, a subdirectory of one is, a worktree
+resolves to its main repo's root (and so both inherits trust and writes trust
+there), and `-C/--cd` selects the directory that gets checked rather than your
+shell's cwd. Trust does not relax the network block.
 
-**`workspace-write` blocks network access by default.** Verified with
-`codex sandbox`: `curl` under `workspace-write` couldn't resolve DNS, and
-returned 200 once network access was enabled. Since `exec` has no approval
+**`workspace-write` blocks network access by default.** Verified with two
+otherwise-identical runs differing only in the flag: `curl` could not resolve
+DNS under `workspace-write`, and returned 200 with network access enabled. The
+header also states it — `(network access enabled)` is appended to the sandbox
+line when it is on. Since `exec` has no approval
 prompt to escalate through, a task whose tests fetch dependencies simply fails.
 Enable it deliberately:
 
@@ -147,7 +151,9 @@ codex exec resume "$SESSION" -c sandbox_mode='"read-only"' "<follow-up>" < /dev/
 ```
 
 Model and reasoning effort are **not** inherited either — they resolve from
-flags and config on every resume. Re-pass `-m` and `-c model_reasoning_effort=`
+flags and config on every resume, so an unflagged resume can silently *switch
+models* (observed: a `gpt-5.5` session resuming as `gpt-5.6-sol` at effort
+`none`), not merely lose the effort setting. Re-pass `-m` and `-c model_reasoning_effort=`
 on each resume if you want them held steady.
 
 Resuming requires a persisted session, so a run started with `--ephemeral`
@@ -215,7 +221,7 @@ Each entry carries the fields that make automatic selection possible:
 | Field | Meaning |
 |---|---|
 | `slug` | The value for `-m`. |
-| `priority` | Rank; **lower is stronger**. `1` is the current frontier coding model. |
+| `priority` | Rank; **lower is stronger**. `1` is the current frontier coding model. Not a total order — values can tie, so break ties deterministically. |
 | `visibility` | `list` for selectable models, `hide` for internal ones (e.g. `codex-auto-review`) — filter these out. |
 | `default_reasoning_level` | What you get if you don't set effort. Frequently `low`, even on the top model. |
 | `supported_reasoning_levels` | Array of `{effort, description}`. Not every model supports every level. |
@@ -281,9 +287,10 @@ nonsense key, and without that flag it is accepted and silently does nothing.
 Unrecognized `-c` keys are accepted silently; `--strict-config` turns that into
 an error. To confirm an override landed, read the stderr header — see
 [Model selection and reasoning effort](#model-selection-and-reasoning-effort),
-which also covers the `--json` caveat. The header's `approval:` line echoes the resolved `approval_policy` — it can
-read `on-request` — but that describes the setting, not `exec`'s behavior:
-nothing can approve non-interactively whatever it says.
+which also covers the `--json` caveat. The header's `approval:` line is not a reliable signal: it reads `never` under
+most configurations, but echoes the configured `approval_policy` when
+`approvals_reviewer` is set. Neither reading changes `exec`'s behavior — nothing
+can approve non-interactively.
 
 ## Authentication
 
@@ -325,12 +332,19 @@ version mismatch:
 | `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
 | `--search` | Yes | **Rejected** | `-c web_search='"live"'` — see below. |
 
-**Web search isn't simply off under `exec`.** `web_search` is a valid config key
-accepting `disabled`/`cached`/`indexed`/`live`, and upstream documents the
-default as `"cached"` with full-access sandboxes promoting it to `"live"`.
-Neither default was observable from this build — captured request bodies carried
-no `tools` entry at all — so treat `-c web_search='"live"'` as the toggle and
-the defaults as unverified.
+**Web search is ON by default under `exec`**, on `read-only` as well as
+full-access. Captured request bodies for a `tool_mode=null` model (`gpt-5.5`)
+carry a top-level `web_search` tool unless it is switched off; the observable
+toggle is `-c web_search='"disabled"'`, which removes it. `"live"` produced no
+observable difference from the default.
+
+The `gpt-5.6-*` models report `tool_mode=code_mode_only` and ship their tools
+inside a developer message rather than top-level, so inspecting `.tools` on
+those models shows nothing — an easy way to conclude search is off when it
+isn't. Accepted values are `disabled`, `cached`, `indexed`, `live`.
+
+This matters alongside the untrusted-input guidance: a run fed a PR body or CI
+log has web access unless you disable it.
 
 ### Hidden flags
 
