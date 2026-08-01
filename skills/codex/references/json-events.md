@@ -107,7 +107,7 @@ truncate before putting it in context.
 ```
 
 **`file_change`** — one item can carry several changes. Paths are absolute.
-`kind` is `update` in the observed run; expect `add` and `delete` too.
+`kind` values `update` and `add` observed; expect `delete` too.
 
 ```json
 {"id":"item_8","type":"file_change","status":"completed",

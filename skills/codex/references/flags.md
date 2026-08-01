@@ -57,7 +57,7 @@ piped *and* a prompt argument is present, the piped content is appended as a
 
 **Codex writes the trust entry itself.** Any run whose sandbox resolves to
 something other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
-`--full-auto`, `--yolo`) appends a trust entry to `$CODEX_HOME/config.toml`
+`--full-auto`, `--yolo`, and `codex exec review` too) appends a trust entry to `$CODEX_HOME/config.toml`
 keyed on the **git repo root** of the workdir — or the workdir itself outside a
 repo. Verified: a run with `-C <repo>/sub/deeper` wrote `[projects."<repo>"]`. Verified on a fresh `CODEX_HOME` and a
 fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
@@ -68,11 +68,18 @@ a run reads, not what it records.
 So delegating a single implementation task permanently raises the default for
 that repository. Always pass `-s` explicitly.
 
-Matching uses the same rule, so it is symmetric with the write: a nested repo
-inside a trusted repo is *not* trusted, a subdirectory of one is, a worktree
-resolves to its main repo's root (and so both inherits trust and writes trust
-there), and `-C/--cd` selects the directory that gets checked rather than your
-shell's cwd. Trust does not relax the network block.
+**Matching is broader than writing**, so trust can be granted by entries a run
+would never create. Writing produces a repo-root key (or the workdir outside a
+repo); matching accepts an entry on **either the workdir itself or its repo
+root**. Verified: a hand-written `[projects."<repo>/sub"]` grants
+`workspace-write` to a run in `<repo>/sub`, a key no write path produces. So
+auditing only repo-root entries under-predicts where write access already
+exists.
+
+Otherwise: a nested repo inside a trusted repo is *not* trusted, a subdirectory
+of a trusted root is, a worktree resolves to its main repo's root (inheriting
+trust and writing trust there), and `-C/--cd` selects the directory checked
+rather than your shell's cwd. Trust does not relax the network block.
 
 **`workspace-write` blocks network access by default.** Verified with two
 otherwise-identical runs differing only in the flag: `curl` could not resolve
@@ -151,9 +158,11 @@ codex exec resume "$SESSION" -c sandbox_mode='"read-only"' "<follow-up>" < /dev/
 ```
 
 Model and reasoning effort are **not** inherited either — they resolve from
-flags and config on every resume, so an unflagged resume can silently *switch
-models* (observed: a `gpt-5.5` session resuming as `gpt-5.6-sol` at effort
-`none`), not merely lose the effort setting. Re-pass `-m` and `-c model_reasoning_effort=`
+flags and config on every resume, so an unflagged resume can *switch models*
+(observed: a `gpt-5.5` session resuming as `gpt-5.6-sol` at effort `none`), not
+merely lose the effort setting. Codex warns on the switch — under `--json` it
+arrives as an `error` item — but only the *first* time, because that resume
+rewrites the session's recorded model. Re-pass `-m` and `-c model_reasoning_effort=`
 on each resume if you want them held steady.
 
 Resuming requires a persisted session, so a run started with `--ephemeral`
@@ -332,19 +341,24 @@ version mismatch:
 | `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
 | `--search` | Yes | **Rejected** | Search is already on; `-c web_search='"disabled"'` is the toggle that changes anything — see below. |
 
-**Web search is ON by default under `exec`**, on `read-only` as well as
-full-access. Captured request bodies for a `tool_mode=null` model (`gpt-5.5`)
-carry a top-level `web_search` tool unless it is switched off; the observable
-toggle is `-c web_search='"disabled"'`, which removes it. `"live"` produced no
-observable difference from the default.
+**`web_search` behaves differently depending on the model**, which makes it
+easy to reason about wrongly. Values: `disabled`, `cached` (the default),
+`indexed`, `live`. Captured request bodies:
 
-The `gpt-5.6-*` models report `tool_mode=code_mode_only` and ship their tools
-inside a developer message rather than top-level, so inspecting `.tools` on
-those models shows nothing — an easy way to conclude search is off when it
-isn't. Accepted values are `disabled`, `cached`, `indexed`, `live`.
+| Model class | Default request | `-c web_search='"live"'` | `-c web_search='"disabled"'` |
+|---|---|---|---|
+| `tool_mode=null` (`gpt-5.5` and older) | `web_search` tool present, `external_web_access: false` | `external_web_access: true` | tool absent |
+| `tool_mode=code_mode_only` (all `gpt-5.6-*`) | no `tools` array at all; no `web_search` anywhere | no observable change | no observable change |
 
-This matters alongside the untrusted-input guidance: a run fed a PR body or CI
-log has web access unless you disable it.
+Two consequences. A search *tool* is offered by default on older models, but
+**external** web access is off — `cached` is not `live`. And on the `gpt-5.6-*`
+models, which include the strongest one this skill selects, the client sends no
+`web_search` tool at all, so `-c web_search='"disabled"'` is a **no-op there**;
+don't treat it as a containment control on those models.
+
+This is client-side evidence from captured payloads and can't rule out
+server-side retrieval inside code mode. Treat it as "the flag does not do what
+you'd assume", not as proof the model cannot search.
 
 ### Hidden flags
 
@@ -353,7 +367,7 @@ but never proves one doesn't:
 
 | Flag | Notes |
 |---|---|
-| `--full-auto` | Deprecated; warns, then applies `workspace-write`. Under `exec` the only observable difference from `-s workspace-write` is the warning. |
+| `--full-auto` | Deprecated; warns, then applies `workspace-write` **and** forces `approval_policy=never`, which `-s workspace-write` does not. (Visible only when `approvals_reviewer` is set — otherwise the header prints `never` either way, which is what made an earlier check conclude they were identical.) |
 | `--yolo` | Alias for `--dangerously-bypass-approvals-and-sandbox`. Worth recognizing in someone else's script. |
 | `--experimental-json` | Alias for `--json`. |
 

@@ -159,9 +159,9 @@ if [ "$RESUMED" != "$SESSION" ]; then
 fi
 ```
 
-This assumes a resumed run re-emits `thread.started` carrying the original id —
-the one load-bearing behavior here not independently confirmed. It warns rather
-than exiting, so a correct run can't be aborted by a wrong assumption.
+A resumed run does re-emit `thread.started` with the original id (confirmed), so
+a mismatch is a real signal. It warns rather than exiting anyway, so an
+unexpected id can't abort work that actually succeeded.
 
 ## Feeding data through stdin
 
