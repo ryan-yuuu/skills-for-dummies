@@ -29,8 +29,13 @@ Usage:
     python3 codex_pick_model.py --slug-only     # just the model slug
     python3 codex_pick_model.py --list          # show selectable models
 
-Exit status: 0 on success, 1 when the catalog can't be loaded or the requested
-model isn't selectable, 2 for bad arguments.
+Exit status: 0 on success; 1 when the catalog can't be loaded, nothing is
+selectable, the requested model isn't selectable, or the resolved slug/effort
+couldn't be spliced safely; 2 for bad arguments.
+
+Only the default output mode enforces a shell-safe charset, because only it is
+consumed by unquoted `$(...)`. `--export` quotes properly via shlex, and
+`--slug-only`/`--effort-only` are meant to be quoted by the caller.
 
 Effort defaults to `xhigh`. If the chosen model doesn't support the requested
 level, this resolves *downward* to the strongest level it does support, so a
@@ -96,7 +101,13 @@ def load_catalog(bundled_only=False):
             return models
         errs.append("catalog contained no usable model entries")
 
-    sys.exit(f"error: could not load model catalog: {'; '.join(errs) or 'empty catalog'}")
+    seen, unique = set(), []
+    for e in errs:
+        flat = " ".join(str(e).split())
+        if flat not in seen:
+            seen.add(flat)
+            unique.append(flat)
+    sys.exit(f"error: could not load model catalog: {'; '.join(unique)}")
 
 
 def selectable(models):
@@ -108,8 +119,8 @@ def selectable(models):
     # Allowlist, matching the documented rule (`list` selectable, `hide`
     # internal). A denylist would promote internal entries like
     # codex-auto-review the moment the catalog introduces a new value.
-    # A catalog that drops the field entirely still degrades usefully: see
-    # best_model, which falls back rather than exiting empty-handed.
+    # A catalog that drops the field entirely still degrades usefully: the
+    # fallback below selects everything not explicitly hidden.
     named = [m for m in models if isinstance(m.get("slug"), str)]
     listed = [m for m in named if m.get("visibility") == "list"]
     if listed:
@@ -179,6 +190,8 @@ def resolve_effort(model, requested):
     # Only now is the catalog's vocabulary worth commenting on.
     available = supported_efforts(model, warn=True)
 
+    # `requested` is CLI-constrained by argparse choices, but this is also an
+    # importable function: keep the membership test so callers can't crash it.
     if requested in EFFORT_ORDER and all(a in EFFORT_ORDER for a in available):
         cutoff = EFFORT_ORDER.index(requested)
         lower = [a for a in available if EFFORT_ORDER.index(a) < cutoff]

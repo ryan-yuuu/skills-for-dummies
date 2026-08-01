@@ -57,7 +57,7 @@ def parse_stream(lines):
         "malformed_lines": 0,
         "other_items": {},
         "in_flight": [],
-        "_completed_ids": set(),
+        "_completed_types": {},
     }
 
     for line in lines:
@@ -103,56 +103,37 @@ def parse_stream(lines):
             # Tracked only so a truncated run can show what was in flight when
             # it died -- otherwise an INCOMPLETE digest reports "Commands: 0".
             item = event.get("item")
-            if isinstance(item, dict):
-                label = item.get("command") or item.get("type") or "?"
-                d["in_flight"].append(
-                    {"key": _item_key(item), "type": item.get("type"), "label": str(label)}
-                )
+            itype = item.get("type") if isinstance(item, dict) else None
+            if isinstance(itype, str):
+                label = item.get("command") or itype
+                d["in_flight"].append({"type": itype, "label": str(label)})
             else:
                 d["malformed_lines"] += 1
 
-    # Reconcile started against completed. Items the digest doesn't model
-    # (reasoning, mcp_tool_call, web_search) also start and complete, so every
-    # completed item counts here -- otherwise a clean run reports them as hung.
-    done = d.pop("_completed_ids", set())
-    untyped = dict(d.pop("_completed_untyped", {}))
+    # Reconcile started against completed, one completion cancelling one start
+    # of the same type. Items the digest doesn't model (reasoning,
+    # mcp_tool_call, web_search) also start and complete, so every completed
+    # item counts here -- otherwise a clean run reports them as hung.
+    counts = dict(d.pop("_completed_types", {}))
     remaining = []
     for started in d["in_flight"]:
-        if started["key"] is not None:
-            if started["key"] in done:
-                continue
-        elif untyped.get(started["type"], 0) > 0:
-            # Consume one id-less completion of this type.
-            untyped[started["type"]] -= 1
+        if counts.get(started["type"], 0) > 0:
+            counts[started["type"]] -= 1
             continue
         remaining.append(started)
     d["in_flight"] = remaining
     return d
 
 
-def _item_key(item):
-    """(type, id) identity for an item, or None when it carries no usable id.
-
-    Keyed on the pair because ids like `item_0` restart per turn, so the same id
-    can name a command in one turn and a reasoning item in the next. Non-scalar
-    ids are treated as absent rather than hashed -- a malformed id must not
-    crash the digest.
-    """
-    iid = item.get("id")
-    if isinstance(iid, bool) or not isinstance(iid, (str, int)):
-        return None
-    return (item.get("type"), iid)
-
-
 def _collect_item(d, item):
     itype = item.get("type")
-    key = _item_key(item)
-    if key is not None:
-        d.setdefault("_completed_ids", set()).add(key)
-    else:
-        # id-less completions are matched by type, counted rather than keyed.
-        d.setdefault("_completed_untyped", {})
-        d["_completed_untyped"][itype] = d["_completed_untyped"].get(itype, 0) + 1
+    if isinstance(itype, str):
+        # Started/completed items are reconciled by counting per type, not by
+        # id. Ids are unreliable for this: they restart per turn, repeat across
+        # types, and arrive as ints or strings interchangeably -- three separate
+        # bugs came from trying to match on them. A count can't crash, can't
+        # produce a phantom, and can't swallow a hung item.
+        d["_completed_types"][itype] = d["_completed_types"].get(itype, 0) + 1
 
     if itype == "agent_message":
         text = item.get("text")
@@ -185,7 +166,8 @@ def _collect_item(d, item):
         # NOT a run failure: a successful run can carry an item-level error
         # (e.g. "Model metadata for X not found. Defaulting to fallback").
         # Only turn.failed and a top-level `error` event decide the status.
-        d["warnings"].append(item.get("message") or item)
+        msg = item.get("message")
+        d["warnings"].append(msg if isinstance(msg, str) else item)
     elif isinstance(itype, str):
         # Item types this build emits that the digest doesn't model
         # (reasoning, mcp_tool_call, web_search, todo_list). Counting them
@@ -201,6 +183,8 @@ def _as_exit_code(value):
         return None
     if isinstance(value, int):
         return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
     try:
         return int(str(value).strip())
     except (TypeError, ValueError):
@@ -255,7 +239,7 @@ def render(d, full_output=False):
 
     if d["warnings"]:
         out.append("")
-        out.append("Warnings (run still completed):")
+        out.append("Warnings (not failures):")
         for warn in d["warnings"]:
             out.append(f"  {warn if isinstance(warn, str) else json.dumps(warn)}")
 
@@ -272,9 +256,9 @@ def render(d, full_output=False):
     if d["malformed_lines"]:
         out.append(f"WARNING: {d['malformed_lines']} unparseable line(s) — stream may be truncated.")
 
-    if d["in_flight"] and status_of(d) == "INCOMPLETE":
+    if d["in_flight"]:
         out.append("")
-        out.append("--- Still in flight when the stream ended ---")
+        out.append("--- Started but never completed ---")
         for started in d["in_flight"]:
             out.append(f"  {started['label']}")
 
