@@ -52,7 +52,7 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | Working directory | Reported sandbox |
 |---|---|
 | Untrusted directory | `read-only` |
-| Project with `trust_level = "trusted"` in `~/.codex/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
+| Project with `trust_level = "trusted"` in `$CODEX_HOME/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
 | Any directory, with `--ignore-user-config` | `read-only` |
 
 **Codex writes the trust entry itself.** Any run whose sandbox resolves to
@@ -250,13 +250,16 @@ There is **no `--effort` flag**. Effort is set only via config override:
 codex exec -m <slug> -c model_reasoning_effort=xhigh "<task>" < /dev/null
 ```
 
-`scripts/codex_pick_model.py` does the selection, validation, and fallback in
-one step, and is the reason nothing in this skill hardcodes a model name.
+`$SKILL_DIR/scripts/codex_pick_model.py` (see `SKILL.md` for `SKILL_DIR`) does
+the selection, validation, and fallback in one step, and is the reason nothing in this skill hardcodes a model name.
 
 Both settings are echoed in the stderr header (`model:` / `reasoning effort:`)
-in plain mode — read it to confirm an override landed instead of assuming it
-did. **`--json` suppresses the header**, and no event in the stream reports the
-model or effort, so JSON runs offer no way to confirm after the fact.
+in plain mode. The header shows the **resolved** value — flag, then `-c`, then
+the user's `config.toml` — so `reasoning effort: xhigh` does not prove your flag
+landed if their config already said `xhigh`; vary the value if you need
+certainty. `none` means nothing set it and the model's catalog default applies.
+**`--json` suppresses the header**, and no event reports model or effort, so
+JSON runs offer no way to confirm after the fact.
 
 ## Config overrides with `-c`
 
@@ -278,8 +281,9 @@ nonsense key, and without that flag it is accepted and silently does nothing.
 Unrecognized `-c` keys are accepted silently; `--strict-config` turns that into
 an error. To confirm an override landed, read the stderr header — see
 [Model selection and reasoning effort](#model-selection-and-reasoning-effort),
-which also covers the `--json` caveat. Note that the header's `approval:` line always reads `never` under `exec`,
-whatever the config says, so it carries no information.
+which also covers the `--json` caveat. The header's `approval:` line echoes the resolved `approval_policy` — it can
+read `on-request` — but that describes the setting, not `exec`'s behavior:
+nothing can approve non-interactively whatever it says.
 
 ## Authentication
 

@@ -43,14 +43,19 @@ codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
    until it passes. Change only src/parser.py." \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 
-git -C /tmp/codex-wt diff main          # review before adopting anything
+git -C /tmp/codex-wt diff main          # modified files
+git -C /tmp/codex-wt status --short     # AND files Codex created — diff won't show them
 git -C /tmp/codex-wt log --oneline main..HEAD
 ```
 
 To adopt the work, cherry-pick or apply the diff — don't merge blindly:
 
 ```bash
-git -C /tmp/codex-wt diff main > /tmp/codex.patch
+# `git add -N` registers new files so diff can see them, and --binary keeps
+# binary content. Plain `git diff main` silently omits both, so a patch built
+# without these loses every file Codex created — with no error.
+git -C /tmp/codex-wt add -N .
+git -C /tmp/codex-wt diff --binary main > /tmp/codex.patch
 git apply --check /tmp/codex.patch && git apply /tmp/codex.patch
 ```
 
@@ -89,10 +94,12 @@ codex exec "${MODEL[@]}" --json -s read-only \
 
 SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id' stage1.jsonl)
 
-# Stage 2 — inherits the conversation, but NOT the sandbox/model/effort
+# Stage 2 — inherits the conversation, but NOT the sandbox/model/effort.
+# --json so the resumed thread id can be asserted; -o to still capture the answer.
 codex exec resume "$SESSION" "${MODEL[@]}" -c sandbox_mode='"workspace-write"' \
+  --json -o stage2-answer.md \
   "Fix the highest-severity race condition you identified. Leave the rest." \
-  < /dev/null
+  < /dev/null > stage2.jsonl 2> stage2.log
 ```
 
 Three things that bite:
@@ -135,6 +142,10 @@ same applies to an unknown thread name. Assert you got the session you meant:
 RESUMED=$(jq -r 'select(.type=="thread.started") | .thread_id' stage2.jsonl)
 [ "$RESUMED" = "$SESSION" ] || { echo "resume started a NEW session — context lost"; exit 1; }
 ```
+
+This assumes a resumed run re-emits `thread.started` carrying the original id.
+That is the one load-bearing behavior here not independently confirmed, so treat
+a mismatch as "investigate", not automatically as "context lost".
 
 ## Feeding data through stdin
 

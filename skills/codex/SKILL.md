@@ -29,9 +29,10 @@ commands, and possibly edit code — then hand you back a claim about what it di
 Two facts shape everything below:
 
 - **It runs autonomously.** `codex exec` has no approval prompts, so nobody is
-  standing between Codex and your filesystem except the sandbox you choose. (The
-  header's `approval:` line always reads `never` under `exec` regardless of
-  config, so it carries no information. Ignore it.)
+  standing between Codex and your filesystem except the sandbox you choose. The
+  header's `approval:` line echoes the resolved `approval_policy`, so it may
+  read `on-request` — that describes the *setting*, not `exec`'s behavior.
+  Nothing can approve non-interactively regardless of its value.
 - **It starts cold.** Codex sees none of your conversation. Whatever context you
   don't put in the prompt does not exist.
 
@@ -47,10 +48,15 @@ long task you'd rather not spend your own context on.
 
 ## The invocation contract
 
-Never run bare `codex`. With no subcommand it launches the interactive terminal
-UI, which waits forever for keystrokes that will never come — your Bash call
-hangs and the session is stuck. The non-interactive entry point is `codex exec`
-(alias `codex e`).
+**Only `codex exec` and its subcommands are non-interactive.** Bare `codex`
+launches the terminal UI and waits forever for keystrokes that never come —
+your Bash call hangs and the session is stuck. So do `codex resume` and
+`codex fork`, which open a session *picker* by default, and `codex app`.
+
+The trap worth internalizing: dropping `exec` from `codex exec resume` gives you
+`codex resume`, which hangs. Safe entry points are `codex exec` (alias
+`codex e`), `codex exec resume`, and `codex exec review` — plus the read-only
+helpers `codex debug models`, `codex doctor`, and `codex sandbox`.
 
 Two preconditions worth checking once, since both fail confusingly rather than
 clearly. Codex must be installed and authenticated, and it refuses to run
@@ -66,9 +72,9 @@ health in one pass. Outside a Git repo you'll get *"Not inside a trusted
 directory and --skip-git-repo-check was not specified"*; pass
 `--skip-git-repo-check` only when you're sure the directory is safe.
 
-Two variables the rest of this file assumes. `SKILL_DIR` is the directory
-containing *this* `SKILL.md` — you're running `codex` from the target
-repository, not from here, so script paths need it spelled out:
+One variable the rest of this file assumes: `SKILL_DIR`, the directory
+containing *this* `SKILL.md`. You'll run `codex` from the target repository,
+not from here, so script paths need it spelled out:
 
 ```bash
 SKILL_DIR="/abs/path/to/skills/codex"   # where this SKILL.md lives
@@ -94,7 +100,7 @@ Each piece earns its place:
 | `exec` | The headless entry point. Without it you get the TUI. |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
 | `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
-| `-s read-only` | Explicit least privilege — **not redundant.** The effective default depends on user config: in a project the user has trusted, `exec` silently gets `workspace-write`. See below. |
+| `-s read-only` | Explicit least privilege — **not redundant.** Codex records trust for any project it writes in, and thereafter defaults to `workspace-write` there. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
 Output splits across two streams, which is what makes this scriptable:
@@ -111,7 +117,9 @@ passed something that subcommand doesn't accept.
 directory with no sessions, starts a **fresh, context-free session and exits
 `0`**. Only a well-formed but unknown UUID fails loudly. So a stage 2 that lost
 all of stage 1's context reports success — assert the resumed thread id rather
-than trusting the exit code.
+than trusting the exit code. The worked two-stage recipe, including that
+assertion, is in
+[`references/patterns.md`](references/patterns.md#multi-turn-with-resume).
 
 One more way to hang: `-i/--image` is **variadic**, so
 `codex exec -i pic.png "do the thing"` consumes the prompt as a second image
@@ -198,9 +206,11 @@ sandbox: read-only
 reasoning effort: xhigh
 ```
 
-With effort unset the header reads `reasoning effort: none` even though the
-request still carries the catalog default — so the header confirms *explicit*
-overrides, not the effective value.
+The header shows the **resolved** value — flag, then `-c`, then the user's
+`config.toml`. `none` means nothing set it anywhere and the model's own catalog
+default applies. So reading `xhigh` does *not* prove your flag landed if the
+user's config already said `xhigh`; change the value you pass if you need to be
+sure.
 
 **`--json` suppresses that header, and the event stream carries no model or
 effort fields** — verified: a `--json` run's entire stderr was one line
@@ -277,43 +287,28 @@ safety boundary**. Choose the least privilege that lets the task finish:
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
 
 **Always pass `-s` — the default is not what you think, and running Codex
-changes it.** The built-in default is `read-only`, but *project trust* overrides
-it: in a directory recorded as `trust_level = "trusted"` in
-`$CODEX_HOME/config.toml`, a bare `codex exec` reports
-`sandbox: workspace-write`.
+changes it.** The built-in default is `read-only`, but Codex records
+`trust_level = "trusted"` for any project it runs in with a non-`read-only`
+sandbox, and thereafter a bare `codex exec` there resolves to
+`workspace-write`. The entry is written even when the run fails, and neither
+`--ephemeral` nor `--ignore-user-config` prevents it.
 
-Codex writes those trust entries **itself**. Any run whose sandbox resolves to
-something other than `read-only` — via `-s`, `-c sandbox_mode`, config,
-`--full-auto`, or `--yolo` — appends a trust entry for the workdir, permanently
-raising the default for every later run there. Verified on a fresh
-`CODEX_HOME` and a fresh repo: one `-s workspace-write` run that *failed at the
-API* still wrote the entry, after which a plain `codex exec` with no `-s`
-resolved to `workspace-write`. Neither `--ephemeral` nor `--ignore-user-config`
-prevents the write.
-
-The consequence is direct: **delegating one implementation task permanently
-escalates the default for that repository.** So a later "just answer this
-question", delegated without `-s`, arrives holding write access. Passing `-s`
-explicitly on every call is the whole defense.
-
-Trust matches the **git repo root** of the effective workdir, exactly — a nested
-repo inside a trusted repo is not trusted, a subdirectory is, and a worktree of
-a trusted repo inherits it. `-C/--cd` decides which directory is checked, not
-your shell's cwd.
+So **delegating one implementation task permanently escalates the default for
+that repository**, and a later "just answer this question" sent without `-s`
+arrives holding write access. Passing `-s` on every call is the whole defense.
+Matching rules and the verification are in
+[`references/flags.md`](references/flags.md#sandbox-and-permissions).
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
 answer when `workspace-write` is *almost* enough — reach for it instead of
 escalating to full access.
 
-**`workspace-write` blocks network access by default.** This catches out the
-most common delegated task there is: "fix this and run the tests" dies the
-moment the test command fetches a dependency, and since `exec` has no approval
-prompt, nothing asks — it just fails. Either install dependencies before
-invoking Codex (better, keeps its reach narrow) or enable network explicitly:
-
-```bash
--c sandbox_workspace_write.network_access=true
-```
+**`workspace-write` blocks network access by default**, which kills the most
+common delegated task there is: "fix this and run the tests" dies the moment the
+test command fetches a dependency, and nothing asks — it just fails. Install
+dependencies before invoking Codex where you can (it keeps Codex's reach
+narrower), otherwise enable it explicitly with
+`-c sandbox_workspace_write.network_access=true`.
 
 **Two subcommands can't take `-s` at all**, and neither is safe by default.
 `codex exec review` rejects `-s` outright. `codex exec resume` also rejects it
@@ -345,19 +340,22 @@ git worktree add /tmp/codex-wt -b codex/attempt
 codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   -s workspace-write -C /tmp/codex-wt \
   -c sandbox_workspace_write.network_access=true \
-  "<task>" < /dev/null
+  "<task>" < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 
 git -C /tmp/codex-wt diff main       # modified files
 git -C /tmp/codex-wt status --short  # AND files Codex created — diff won't show them
-
-git worktree remove /tmp/codex-wt --force   # --force: the tree always has changes
-git branch -D codex/attempt
 ```
+
+Full recipe — adopting the patch without losing new files, and cleanup — in
+[`references/patterns.md`](references/patterns.md#worktree-isolation).
 
 ## Four shapes of delegation
 
 These all resolve the model once up front (see the shell-splitting note above
-for why the values are kept in separate quoted variables):
+for why the values are kept in separate quoted variables). **A real run takes
+minutes**, so background the call or raise the timeout before you fire any of
+them — see [Long runs](#long-runs-and-running-several-at-once) — and redirect
+both streams to files:
 
 ```bash
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
@@ -399,10 +397,16 @@ scoping, either use the bare-prompt form and describe the scope yourself, or
 drop to plain `codex exec` with the diff in the prompt:
 
 ```bash
-git diff main | codex exec "${MODEL[@]}" -s read-only \
-  "Review this diff. Every finding must cite file and line, name a concrete
-   failure scenario, and carry a severity. No stylistic nitpicks."
+# Match --uncommitted (staged + unstaged + untracked). `git add -N` makes new
+# files visible to diff; plain `git diff` would silently skip them.
+git add -N . && git diff --binary HEAD \
+  | codex exec "${MODEL[@]}" -s read-only \
+    "Review this diff. Every finding must cite file and line, name a concrete
+     failure scenario, and carry a severity. No stylistic nitpicks."
 ```
+
+For a base-branch review instead, pipe `git diff --binary main`. Note there's no
+`< /dev/null` here — stdin is deliberately carrying the diff.
 
 **Implement** — hand over a scoped task. Needs write access, so isolate first
 (above), and always read the resulting diff yourself.
@@ -446,9 +450,9 @@ timeout, which trades one blocking wait for a longer one.
 They compose. One backgrounded call that fans out internally gives N parallel
 runs and a single notification; backgrounding N separate calls gives N
 notifications, so you can act on each result as it lands rather than waiting for
-the slowest. Worked fan-out recipe in `references/patterns.md`.
+the slowest. Worked fan-out recipe in [`references/patterns.md`](references/patterns.md#parallel-fan-out).
 
-Three constraints apply either way:
+Four constraints apply either way:
 
 - **Parallelism multiplies cost.** Four concurrent runs cost four runs. It buys
   wall-clock, not quota — so fan out across genuinely separable subjects, not
@@ -461,7 +465,7 @@ Three constraints apply either way:
 - **Collect exit statuses.** A bare `wait` returns `0` even when every job
   failed, so a fan-out can report success while leaving you empty result files.
   Capture each PID and `wait` on it individually — the recipe in
-  `references/patterns.md` does this.
+  [`references/patterns.md`](references/patterns.md#parallel-fan-out) does this.
 
 `codex_digest.py` reads a partial JSONL stream mid-flight and reports
 `INCOMPLETE`, which is how you tell "still working" from "finished".

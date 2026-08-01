@@ -5,8 +5,11 @@ progresses. Use it when you need to know *what Codex did* — which commands ran
 which files changed, what it cost. When you only need the conclusion, plain mode
 is simpler, because there stdout is already just the final message.
 
-`$SKILL_DIR` below is the directory holding this skill's `SKILL.md`; set it as
-shown there. Recipes use `jq`.
+Recipes use `jq`. `$SKILL_DIR` is this skill's directory:
+
+```bash
+SKILL_DIR="/abs/path/to/skills/codex"
+```
 
 ## Contents
 
