@@ -54,9 +54,11 @@ failure, still not something to invoke from an agent.)
 The trap worth internalizing: dropping `exec` from `codex exec resume` leaves
 `codex resume`, which hangs. Non-interactive commands include `codex exec` and
 its `resume`/`review` subcommands, plus top-level `codex review`, `codex
-doctor`, `codex debug models`, and `codex apply`. This skill uses the `exec`
-forms throughout, because only they accept `--json`, `-o`, `--output-schema`,
-and `--ephemeral`.
+doctor`, `codex debug models`, `codex apply`, and the `codex cloud`
+*subcommands* such as `codex cloud exec` — it's only bare `codex cloud` that
+opens the TUI. This skill uses the `exec` forms
+throughout, because they're the ones that accept the full scripting surface —
+`--json`, `-o`, `--output-schema`, `--ephemeral` — together.
 
 Two preconditions worth checking once, since both fail confusingly rather than
 clearly. Codex must be installed and authenticated, and it refuses to run
@@ -109,7 +111,7 @@ Each piece earns its place:
 | `exec` | The headless entry point. Drop it and you get the TUI (`codex`) or an interactive session (`codex resume`) that hangs your call. |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
 | `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
-| `-s read-only` | Explicit least privilege — **not redundant.** Any run with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
+| `-s read-only` | Explicit least privilege — **not redundant.** Starting a session with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
 Output splits across two streams, which is what makes this scriptable:
@@ -299,11 +301,13 @@ safety boundary**. Choose the least privilege that lets the task finish:
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
 
 **Always pass `-s` — the default is not what you think, and running Codex
-changes it.** The built-in default is `read-only`, but any run with a
-non-`read-only` sandbox makes Codex record `trust_level = "trusted"` for the
-**git repo root** of its workdir, and a bare `codex exec` there afterwards
-resolves to `workspace-write`. The entry is written even when the run fails, and
-neither `--ephemeral` nor `--ignore-user-config` prevents it.
+changes it.** The built-in default is `read-only`, but a run that *starts a
+session* with a non-`read-only` sandbox makes Codex record
+`trust_level = "trusted"` for the **git repo root** of its workdir, and a bare
+`codex exec` there afterwards resolves to `workspace-write`. The entry is
+written even when the run fails, and neither `--ephemeral` nor
+`--ignore-user-config` prevents it. (Genuinely resuming an existing session does
+not write one.)
 
 Two consequences worth holding onto. **Delegating one implementation task
 permanently escalates the default for the whole repository** — a run in

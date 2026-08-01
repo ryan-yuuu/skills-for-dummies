@@ -55,11 +55,19 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | Project with `trust_level = "trusted"` in `$CODEX_HOME/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
 | Any directory, with `--ignore-user-config` | `read-only` |
 
-**Codex writes the trust entry itself.** Any run whose sandbox resolves to
-something other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
-`--full-auto`, `--yolo`) appends a trust entry to `$CODEX_HOME/config.toml`
-keyed on the **git repo root** of the workdir — or the workdir itself outside a
-repo. Verified: a run with `-C <repo>/sub/deeper` wrote `[projects."<repo>"]`. Verified on a fresh `CODEX_HOME` and a
+**Codex writes the trust entry itself**, when a run *creates a session* with a
+sandbox other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
+`--full-auto`, `--yolo`). The key is the **git repo root** of the workdir — or
+the workdir itself outside a repo. Verified: a run with `-C <repo>/sub/deeper`
+wrote `[projects."<repo>"]`.
+
+**Genuinely resuming a session does not write one.** Verified: `codex exec
+resume <id> -c sandbox_mode='"workspace-write"'` left the config untouched,
+while an otherwise identical plain `codex exec` wrote an entry. The exception is
+telling — a resume that *silently starts fresh* (unknown thread name, or
+`--last` with no session) is creating a session, so it does write one. The trust
+entry appearing after a resume is therefore a signal that the resume didn't
+resume. Verified on a fresh `CODEX_HOME` and a
 fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
 and the next bare `codex exec` then resolved to `workspace-write`. **Neither
 `--ephemeral` nor `--ignore-user-config` prevents the write** — they change what
@@ -205,7 +213,7 @@ is silently ignored. Don't read a successful parse as proof it took effect.
 **`review` rejects most of `exec`'s flags** — the same class of surprise as
 `resume`, and more consequential because this is the review path. Rejected:
 `-s/--sandbox`, `-C/--cd`, `--add-dir`, `--color`, `-p/--profile`, `-i/--image`,
-`--oss`. It accepts `-c`, `-m`, `--json`, `-o`, `--output-schema`,
+`--oss`, `--local-provider`. It accepts `-c`, `-m`, `--json`, `-o`, `--output-schema`,
 `--ephemeral`, `--strict-config`, `--ignore-user-config`, `--ignore-rules`,
 `--skip-git-repo-check`, `--enable/--disable`, and the two `--dangerously-*`
 flags.
@@ -222,8 +230,9 @@ rather than prose you have to parse.
 ## Model selection and reasoning effort
 
 `codex debug models` prints the catalog this binary can actually see, as JSON.
-It's an **experimental** subcommand upstream ("may be removed or changed"), so
-treat its field names as liable to move — `codex_pick_model.py` exits non-zero
+The CLI doesn't mark `debug` experimental (unlike `cloud`, `app-server`,
+`remote-control`, `exec-server`), but it is a debugging surface rather than a
+supported API, so treat its field names as liable to move — `codex_pick_model.py` exits non-zero
 with a clear message rather than emitting garbage flags if the shape changes,
 letting you fall back to running without `-m`.
 
@@ -378,9 +387,11 @@ one this skill selects — the client sends no `web_search` tool at all, so
 `-c web_search='"disabled"'` is a **no-op there**; don't treat it as a
 containment control on those models.
 
-This is client-side evidence from captured payloads and can't rule out
-server-side retrieval inside code mode. Treat it as "the flag does not do what
-you'd assume", not as proof the model cannot search.
+This is client-side evidence from payloads captured over an HTTP
+`wire_api=responses` endpoint; production uses a websocket transport, though the
+payload structs are shared. It can't rule out server-side retrieval inside code
+mode either. Treat it as "the flag does not do what you'd assume", not as proof
+the model cannot search.
 
 ### Hidden flags
 

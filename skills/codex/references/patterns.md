@@ -101,8 +101,9 @@ prompt doesn't need to restate it.
 `resume` accepts neither `-s` nor `-C` (both rejected at parse time), so stage 2
 writes into whatever directory you invoke it from — you cannot point it at a
 worktree. If you're also editing that repo, keep stage 2 `read-only` and apply
-the change yourself. A `workspace-write` stage 2 also permanently trusts the
-repo root.
+the change yourself. A `workspace-write` stage 2 does *not* trust the repo root — resuming an
+existing session never writes an entry — but if the resume silently starts fresh
+instead, it will.
 
 ```bash
 # Stage 1 — note: no --ephemeral, or there is no session to resume
