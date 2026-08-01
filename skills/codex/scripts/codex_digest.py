@@ -75,7 +75,8 @@ def parse_stream(lines):
         etype = event.get("type")
 
         if etype == "thread.started":
-            d["thread_id"] = event.get("thread_id")
+            tid = event.get("thread_id")
+            d["thread_id"] = tid if isinstance(tid, str) else None
         elif etype == "turn.completed":
             d["completed"] = True
             # A later turn without usage must not erase usage already seen
@@ -103,22 +104,54 @@ def parse_stream(lines):
             item = event.get("item")
             if isinstance(item, dict):
                 label = item.get("command") or item.get("type") or "?"
-                d["in_flight"].append({"id": item.get("id"), "label": str(label)})
+                d["in_flight"].append(
+                    {"key": _item_key(item), "type": item.get("type"), "label": str(label)}
+                )
             else:
                 d["malformed_lines"] += 1
 
-    # Anything that also completed is no longer in flight. Match on every
-    # completed id, not just commands and file changes -- item types the digest
-    # doesn't model (reasoning, mcp_tool_call, web_search) also start and
-    # complete, and would otherwise be reported as hung on a clean run.
-    done = {i for i in d.pop("_completed_ids") if i is not None}
-    d["in_flight"] = [s for s in d["in_flight"] if s["id"] is None or s["id"] not in done]
+    # Reconcile started against completed. Items the digest doesn't model
+    # (reasoning, mcp_tool_call, web_search) also start and complete, so every
+    # completed item counts here -- otherwise a clean run reports them as hung.
+    done = d.pop("_completed_ids", set())
+    untyped = dict(d.pop("_completed_untyped", {}))
+    remaining = []
+    for started in d["in_flight"]:
+        if started["key"] is not None:
+            if started["key"] in done:
+                continue
+        elif untyped.get(started["type"], 0) > 0:
+            # Consume one id-less completion of this type.
+            untyped[started["type"]] -= 1
+            continue
+        remaining.append(started)
+    d["in_flight"] = remaining
     return d
+
+
+def _item_key(item):
+    """(type, id) identity for an item, or None when it carries no usable id.
+
+    Keyed on the pair because ids like `item_0` restart per turn, so the same id
+    can name a command in one turn and a reasoning item in the next. Non-scalar
+    ids are treated as absent rather than hashed -- a malformed id must not
+    crash the digest.
+    """
+    iid = item.get("id")
+    if isinstance(iid, bool) or not isinstance(iid, (str, int)):
+        return None
+    return (item.get("type"), iid)
 
 
 def _collect_item(d, item):
     itype = item.get("type")
-    d["_completed_ids"].add(item.get("id"))
+    key = _item_key(item)
+    if key is not None:
+        d.setdefault("_completed_ids", set()).add(key)
+    else:
+        # id-less completions are matched by type, counted rather than keyed.
+        d.setdefault("_completed_untyped", {})
+        d["_completed_untyped"][itype] = d["_completed_untyped"].get(itype, 0) + 1
 
     if itype == "agent_message":
         text = item.get("text")
@@ -131,7 +164,7 @@ def _collect_item(d, item):
             {
                 "id": item.get("id"),
                 "command": str(item.get("command", "")),
-                "exit_code": item.get("exit_code"),
+                "exit_code": _as_exit_code(item.get("exit_code")),
                 "output": item.get("aggregated_output") if isinstance(item.get("aggregated_output"), str) else "",
             }
         )
@@ -155,6 +188,20 @@ def _collect_item(d, item):
         # (reasoning, mcp_tool_call, web_search, todo_list). Counting them
         # beats silently dropping them.
         d["other_items"][itype] = d["other_items"].get(itype, 0) + 1
+    else:
+        d["malformed_lines"] += 1
+
+
+def _as_exit_code(value):
+    """Coerce to int or None. A string "0" must not read as a failure."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def truncate_output(text, full=False):
@@ -216,7 +263,7 @@ def render(d, full_output=False):
     if d["malformed_lines"]:
         out.append(f"WARNING: {d['malformed_lines']} unparseable line(s) — stream may be truncated.")
 
-    if d["in_flight"]:
+    if d["in_flight"] and status_of(d) == "INCOMPLETE":
         out.append("")
         out.append("--- Still in flight when the stream ended ---")
         for started in d["in_flight"]:

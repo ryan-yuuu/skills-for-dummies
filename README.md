@@ -50,7 +50,7 @@ _Vendored from [google/adk-python](https://github.com/google/adk-python) (Apache
 npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-agent-builder
 ```
 
-### [codex-non-interactive](skills/codex-non-interactive)
+### [codex](skills/codex)
 
 Delegate work to the OpenAI Codex CLI headlessly — second opinions, code review,
 scoped implementation, design critique and brainstorming — with a safe invocation
@@ -60,7 +60,7 @@ acceptance bar set before the call and verified after it.
 #### Install
 
 ```bash
-npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill codex-non-interactive
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill codex
 ```
 
 <br>

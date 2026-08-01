@@ -12,8 +12,8 @@ Flag surfaces move between releases — when something is rejected, run
 - [Model selection and reasoning effort](#model-selection-and-reasoning-effort)
 - [Config overrides with `-c`](#config-overrides-with--c)
 - [Authentication](#authentication)
-- [Global flags that don't propagate to `exec`](#global-flags-that-dont-propagate-to-exec)
 - [Diagnosing a broken environment](#diagnosing-a-broken-environment)
+- [Global flags that don't propagate to `exec`](#global-flags-that-dont-propagate-to-exec)
 - [Exit codes and failure modes](#exit-codes-and-failure-modes)
 
 ## `codex exec`
@@ -128,6 +128,7 @@ restricted session. There is also no `-C/--cd`, `--add-dir`, `--color`,
 To constrain a resumed run, override the config key directly:
 
 ```bash
+SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id' run.jsonl)
 codex exec resume "$SESSION" -c sandbox_mode='"read-only"' "<follow-up>" < /dev/null
 ```
 
@@ -254,11 +255,12 @@ so strings generally need quotes that survive your shell.
 recognized key** in 0.146.0 — `--strict-config` rejects it exactly like a
 nonsense key, and without that flag it is accepted and silently does nothing.
 
-In plain mode the stderr header echoes the effective model, sandbox, reasoning
-effort, and session id. (Its `approval:` line reflects config, not the effective
-policy — `exec` injects `never` regardless, since nothing can approve.) Read it to confirm an override
-actually landed — unrecognized `-c` keys are otherwise accepted silently, which
-`--strict-config` converts into an error.
+Unrecognized `-c` keys are accepted silently; `--strict-config` turns that into
+an error. To confirm an override landed, read the stderr header — see
+[Model selection and reasoning effort](#model-selection-and-reasoning-effort),
+which also covers the `--json` caveat. Note that the header's `approval:` line
+reflects config rather than the effective policy: `exec` injects `never`
+regardless, since nothing can approve.
 
 ## Authentication
 

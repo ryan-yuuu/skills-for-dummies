@@ -35,12 +35,14 @@ model isn't selectable, 2 for bad arguments.
 Effort defaults to `xhigh`. If the chosen model doesn't support the requested
 level, this resolves *downward* to the strongest level it does support, so a
 request can't silently become more expensive than what was asked for. It goes
-above the request only when the model supports nothing lower, and says which
-way it went on stderr either way.
+above the request only when the model supports nothing lower, and says on stderr
+which way it went. If the catalog uses an effort vocabulary this doesn't
+recognize, it falls back to catalog order and says the direction is unknown.
 """
 
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -64,37 +66,37 @@ def load_catalog(bundled_only=False):
         sys.exit("error: `codex` not found on PATH")
 
     attempts = [True] if bundled_only else [False, True]
-    last_err = ""
+    errs = []
     for bundled in attempts:
         cmd = ["codex", "debug", "models"] + (["--bundled"] if bundled else [])
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=CATALOG_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            last_err = f"`{' '.join(cmd)}` timed out after {CATALOG_TIMEOUT_S}s"
+            errs.append(f"`{' '.join(cmd)}` timed out after {CATALOG_TIMEOUT_S}s")
             continue
         except OSError as exc:
-            last_err = f"could not run `{' '.join(cmd)}`: {exc}"
+            errs.append(f"could not run `{' '.join(cmd)}`: {exc}")
             continue
         if proc.returncode != 0:
-            last_err = ((proc.stderr or "").strip() or f"exit {proc.returncode}") if not last_err else last_err
+            errs.append((proc.stderr or "").strip() or f"exit {proc.returncode}")
             continue
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
-            last_err = f"unparseable catalog: {exc}"
+            errs.append(f"unparseable catalog: {exc}")
             continue
         # Everything below is untrusted shape: guard rather than assume.
         if not isinstance(payload, dict):
-            last_err = f"catalog is {type(payload).__name__}, expected an object"
+            errs.append(f"catalog is {type(payload).__name__}, expected an object")
             continue
         models = [m for m in (payload.get("models") or []) if isinstance(m, dict)]
         if models:
             if bundled and not bundled_only:
-                print(f"note: using bundled catalog ({last_err or 'refresh failed'})", file=sys.stderr)
+                print(f"note: using bundled catalog ({errs[0] if errs else 'refresh failed'})", file=sys.stderr)
             return models
-        last_err = last_err or "catalog contained no usable model entries"
+        errs.append("catalog contained no usable model entries")
 
-    sys.exit(f"error: could not load model catalog: {last_err or 'empty catalog'}")
+    sys.exit(f"error: could not load model catalog: {'; '.join(errs) or 'empty catalog'}")
 
 
 def selectable(models):
@@ -103,10 +105,18 @@ def selectable(models):
     `visibility: hide` marks internal entries (e.g. codex-auto-review) that
     aren't meant to be selected directly.
     """
-    # Absent `visibility` counts as selectable: only an explicit "hide" should
-    # exclude, so a catalog that drops the field degrades to "everything" rather
-    # than to "nothing selectable".
-    return [m for m in models if m.get("visibility") != "hide" and isinstance(m.get("slug"), str)]
+    # Allowlist, matching the documented rule (`list` selectable, `hide`
+    # internal). A denylist would promote internal entries like
+    # codex-auto-review the moment the catalog introduces a new value.
+    # A catalog that drops the field entirely still degrades usefully: see
+    # best_model, which falls back rather than exiting empty-handed.
+    named = [m for m in models if isinstance(m.get("slug"), str)]
+    listed = [m for m in named if m.get("visibility") == "list"]
+    if listed:
+        return listed
+    # No entry claims `list` -- the vocabulary changed. Fall back to "anything
+    # not explicitly hidden", which is still better than selecting nothing.
+    return [m for m in named if m.get("visibility") != "hide"]
 
 
 def _priority_key(model):
@@ -160,14 +170,16 @@ def resolve_effort(model, requested):
     quota than they asked for. So prefer the strongest supported level that is
     still <= the request, and only exceed the request when nothing lower exists.
     """
-    available = supported_efforts(model, warn=True)
+    available = supported_efforts(model)
     if not available:
         # Catalog didn't report levels; trust the caller rather than block.
         return requested
     if requested in available:
         return requested
+    # Only now is the catalog's vocabulary worth commenting on.
+    available = supported_efforts(model, warn=True)
 
-    if all(a in EFFORT_ORDER for a in available):
+    if requested in EFFORT_ORDER and all(a in EFFORT_ORDER for a in available):
         cutoff = EFFORT_ORDER.index(requested)
         lower = [a for a in available if EFFORT_ORDER.index(a) < cutoff]
         choice = lower[-1] if lower else available[0]
@@ -179,7 +191,7 @@ def resolve_effort(model, requested):
     if choice in EFFORT_ORDER and requested in EFFORT_ORDER:
         direction = "down " if EFFORT_ORDER.index(choice) < EFFORT_ORDER.index(requested) else "up "
     else:
-        direction = ""
+        direction = "(direction unknown — unfamiliar catalog vocabulary) "
     print(
         f"note: {model.get('slug', '?')} does not support effort '{requested}'; "
         f"resolving {direction}to '{choice}' (supports: {', '.join(available)})",
@@ -191,13 +203,15 @@ def resolve_effort(model, requested):
 def render_list(models):
     rows = sorted(selectable(models), key=_priority_key)
     hidden = len(models) - len(rows)
-    width = max((len(m["slug"]) for m in rows), default=10)
+    width = max(5, max((len(m["slug"]) for m in rows), default=10))
     out = [f"{'PRIO':<5} {'MODEL':<{width}}  {'DEFAULT':<8} EFFORTS"]
     for m in rows:
         # A key present with a JSON null survives .get(k, default), so coerce
         # rather than relying on the default -- the live catalog does ship nulls.
+        # Only int priorities are rankable, so only int priorities display as a
+        # number -- otherwise the table prints an order it didn't sort by.
         prio = m.get("priority")
-        prio = str(prio) if isinstance(prio, (int, str)) and not isinstance(prio, bool) else "?"
+        prio = str(prio) if isinstance(prio, int) and not isinstance(prio, bool) else "?"
         level = m.get("default_reasoning_level")
         level = level if isinstance(level, str) else "?"
         out.append(f"{prio:<5} {m['slug']:<{width}}  {level:<8} {','.join(supported_efforts(m))}")
@@ -232,12 +246,13 @@ def main():
 
     if args.do_list:
         print(render_list(models))
-        return 0
+        # Consistent with the default path, which exits 1 on the same catalog.
+        return 0 if selectable(models) else 1
 
     if args.model:
         match = next((m for m in selectable(models) if m.get("slug") == args.model), None)
         if match is None:
-            available = ", ".join(m["slug"] for m in selectable(models))
+            available = ", ".join(m["slug"] for m in selectable(models)) or "none"
             sys.exit(f"error: model '{args.model}' not selectable. Available: {available}")
         model = match
     else:
@@ -255,7 +270,16 @@ def main():
         print(f"CODEX_MODEL={shlex.quote(model['slug'])}")
         print(f"CODEX_EFFORT={shlex.quote(effort)}")
     else:
-        print(f"-m {shlex.quote(model['slug'])} -c model_reasoning_effort={shlex.quote(effort)}")
+        # This form is spliced with unquoted $(...), which word-splits but does
+        # NOT remove quotes -- so quoting here would produce broken argv.
+        # Refuse anything that couldn't survive the splice instead.
+        for label, value in (("model", model["slug"]), ("effort", effort)):
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+                sys.exit(
+                    f"error: {label} '{value}' contains characters unsafe for $(...) splicing; "
+                    f"use --export and quote it yourself"
+                )
+        print(f"-m {model['slug']} -c model_reasoning_effort={effort}")
     return 0
 
 

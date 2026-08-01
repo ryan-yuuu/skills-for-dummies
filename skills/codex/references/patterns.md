@@ -10,7 +10,7 @@ single argument and the run dies with an opaque HTTP 400. See the model section
 in `SKILL.md` for why the defaults are worth overriding at all.
 
 ```bash
-SKILL_DIR="/abs/path/to/skills/codex-non-interactive"   # this skill's directory
+SKILL_DIR="/abs/path/to/skills/codex"   # this skill's directory
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
 MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
 ```
@@ -79,7 +79,7 @@ prompt doesn't need to restate it.
 
 ```bash
 # Stage 1 — note: no --ephemeral, or there is no session to resume
-codex exec "${MODEL[@]}" --json -s workspace-write \
+codex exec "${MODEL[@]}" --json -s read-only \
   "Review src/ for race conditions. List each with file and line." \
   < /dev/null > stage1.jsonl
 
@@ -101,6 +101,10 @@ Three things that bite:
   `workspace-write`. Stage 1's choice simply doesn't carry.
 - **Model and effort don't carry either.** They resolve from flags and config on
   every resume, so re-pass them each time.
+
+`resume` also has no `-C/--cd`, and it resolves the sandbox from the directory
+you invoke it in — so to continue a worktree-isolated run you must `cd` into the
+worktree first. Otherwise the worktree and resume patterns don't compose.
 
 Because nothing carries, set the sandbox explicitly on *every* resume:
 
@@ -210,16 +214,27 @@ is the cost — every run consumes quota — so fan out across genuinely differe
 subjects rather than re-asking one question many ways.
 
 ```bash
+pids=()
 for area in auth billing search; do
   codex exec "${MODEL[@]}" --ephemeral -s read-only \
     "Audit src/$area/ for error-handling gaps. List findings, most severe first." \
     < /dev/null > "audit-$area.md" 2> "audit-$area.log" &
+  pids+=($!)
 done
-wait
+
+rc=0
+for p in "${pids[@]}"; do wait "$p" || rc=1; done
+[ "$rc" -ne 0 ] && echo "at least one run failed — check audit-*.log"
 ```
 
-Keep every parallel run `read-only`. Concurrent writers in one tree collide, and
-that is precisely what the worktree pattern exists to prevent.
+**Collect exit statuses; don't use a bare `wait`.** Bare `wait` returns `0` even
+when every job failed — verified — so a fan-out that died three times reports
+success and leaves you three empty result files. An empty output file with a
+zero status is the signature of exactly this mistake.
+
+Keep every parallel run `read-only`, or give each its own worktree. Concurrent
+writers in one tree collide, which is what the worktree pattern exists to
+prevent.
 
 ## Adversarial second opinion
 
@@ -252,12 +267,17 @@ A substantial Codex task can run for many minutes, well past a default command
 timeout. A timeout kills the run and wastes everything spent so far, so decide
 up front:
 
+For a *single* long run, prefer your harness's own backgrounding — the Bash
+tool's `run_in_background` in Claude Code — rather than a shell `&`, so the
+harness keeps tracking the work and notifies you when it exits (see the table in
+`SKILL.md`). Use `&` when you want the exit status of a run whose output goes to
+files:
+
 ```bash
-# Background: doesn't block, collect the files when it finishes
 codex exec "${MODEL[@]}" -s read-only "<large audit>" < /dev/null \
   > audit.md 2> audit.log &
 CODEX_PID=$!
-wait $CODEX_PID; echo "exit=$?"
+wait "$CODEX_PID"; echo "exit=$?"   # blocks here by design — collects the status
 ```
 
 Always redirect both streams to files. Relying on scrollback loses the output
@@ -285,6 +305,11 @@ network-off `workspace-write` sandbox alone:
 
 ```bash
 set -euo pipefail
+
+# Self-contained: set these in the workflow, not from the preamble above.
+SKILL_DIR="/abs/path/to/skills/codex"
+eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
+MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
 
 CODEX_API_KEY="$SECRET_KEY" codex exec "${MODEL[@]}" \
   --json \
