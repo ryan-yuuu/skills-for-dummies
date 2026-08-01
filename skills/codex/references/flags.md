@@ -67,11 +67,13 @@ while an otherwise identical plain `codex exec` wrote an entry. The exception is
 telling — a resume that *silently starts fresh* (unknown thread name, or
 `--last` with no session) is creating a session, so it does write one. The trust
 entry appearing after a resume is therefore a signal that the resume didn't
-resume. Verified on a fresh `CODEX_HOME` and a
-fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
-and the next bare `codex exec` then resolved to `workspace-write`. **Neither
-`--ephemeral` nor `--ignore-user-config` prevents the write** — they change what
-a run reads, not what it records.
+resume.
+
+The write happens even on failure: verified on a fresh `CODEX_HOME` and a fresh
+repo, one `-s workspace-write` run that failed at the API still wrote the entry,
+and the next bare `codex exec` resolved to `workspace-write`. **Neither
+`--ephemeral` nor `--ignore-user-config` prevents it** — they change what a run
+reads, not what it records.
 
 So delegating a single implementation task permanently raises the default for
 that repository. Always pass `-s` explicitly.
@@ -79,11 +81,11 @@ that repository. Always pass `-s` explicitly.
 **Matching is broader than writing**, so trust can be granted by entries a run
 would never create. Writing produces a repo-root key (or the workdir outside a
 repo); matching accepts an **exact** entry on either the workdir itself or its repo
-root — it is not a prefix walk, so `[projects."/Users/you"]` does not trust
-every repo beneath it (verified). Verified: a hand-written `[projects."<repo>/sub"]` grants
-`workspace-write` to a run in `<repo>/sub`, a key no write path produces. So
-auditing only repo-root entries under-predicts where write access already
-exists.
+root. It is not a prefix walk — verified twice: `[projects."/Users/you"]` does
+not trust every repo beneath it, and a hand-written `[projects."<repo>/sub"]`
+grants `workspace-write` to a run in `<repo>/sub`, a key no write path ever
+produces. So auditing only repo-root entries under-predicts where write access
+already exists.
 
 Otherwise: a nested repo inside a trusted repo is *not* trusted; a subdirectory
 of a trusted root is — not by prefix, but because its repo root is the trusted
@@ -95,9 +97,7 @@ rather than your shell's cwd. Trust does not relax the network block.
 otherwise-identical runs differing only in the flag: `curl` could not resolve
 DNS under `workspace-write`, and returned 200 with network access enabled. The
 header also states it — `(network access enabled)` is appended to the sandbox
-line when it is on. Since `exec` has no approval
-prompt to escalate through, a task whose tests fetch dependencies simply fails.
-Enable it deliberately:
+line when it is on. Enable it deliberately:
 
 ```bash
 codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "<task>" < /dev/null

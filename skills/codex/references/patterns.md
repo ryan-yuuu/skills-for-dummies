@@ -22,6 +22,7 @@ Several recipes use `jq`.
 - [Worktree isolation](#worktree-isolation)
 - [Multi-turn with resume](#multi-turn-with-resume)
 - [Feeding data through stdin](#feeding-data-through-stdin)
+- [Reviewing a working diff](#reviewing-a-working-diff)
 - [Structured output](#structured-output)
 - [Parallel fan-out](#parallel-fan-out)
 - [Adversarial second opinion](#adversarial-second-opinion)
@@ -86,10 +87,9 @@ what it's for — but the escalation lands on the real repository and outlives
 the entry from `$CODEX_HOME/config.toml`.
 
 `sandbox_workspace_write.network_access=true` is there because
-**`workspace-write` blocks network by default** — without it, any test run that
-resolves a hostname or fetches a dependency fails, and `exec` has no approval
-prompt to escalate through. Omit it when the task genuinely needs no network;
-that's the safer default when you can afford it.
+`workspace-write` blocks the network by default
+([`flags.md`](flags.md#sandbox-and-permissions)). Omit it when the task
+genuinely needs no network — that's the safer default when you can afford it.
 
 ## Multi-turn with resume
 
@@ -214,6 +214,41 @@ gh run view 123456 --log | codex exec "${MODEL[@]}" -s read-only \
 messages, and issue text can all carry instructions aimed at the model. Keep
 runs like this `read-only`, treat the output as a draft rather than something to
 post unread, and don't pipe attacker-influenced text into a write-enabled run.
+
+## Reviewing a working diff
+
+`codex exec review` scopes itself automatically, but its target flags
+(`--uncommitted`, `--base`, `--commit`) cannot be combined with a prompt — so
+acceptance criteria can't reach it. Pipe the diff into a plain `codex exec`
+instead.
+
+```bash
+# Build the diff in a THROWAWAY index so the user's staging is untouched.
+# `git add -N` in the real index would break `git stash` and make the next
+# `git commit -a` sweep in untracked files; `git reset` to undo it would
+# destroy any partial staging they had.
+TMPIDX=$(mktemp -u); DIFF=$(mktemp)
+trap 'rm -f "$TMPIDX" "$DIFF"' EXIT
+GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD
+GIT_INDEX_FILE="$TMPIDX" git add -A
+GIT_INDEX_FILE="$TMPIDX" git diff --cached HEAD > "$DIFF"
+rm -f "$TMPIDX"
+
+# An empty diff would get a confident "no issues found" that reads like a clean
+# bill of health for code Codex never saw.
+[ -s "$DIFF" ] || { echo "no uncommitted changes to review"; exit 0; }
+
+codex exec "${MODEL[@]}" --ephemeral -s read-only \
+  "Review this diff. Every finding must cite file and line, name a concrete
+   failure scenario, and carry a severity. No stylistic nitpicks." \
+  < "$DIFF" > "${TMPDIR:-/tmp}/review.md" 2> "${TMPDIR:-/tmp}/review.log"
+rm -f "$DIFF"
+```
+
+That covers staged, unstaged, and untracked — the same scope as `--uncommitted`,
+without touching the user's index. For a base-branch review, swap the last
+`git diff` for `GIT_INDEX_FILE="$TMPIDX" git diff --cached "$BASE"` against the
+fork point. Note there's no `< /dev/null`: stdin is carrying the diff.
 
 ## Structured output
 

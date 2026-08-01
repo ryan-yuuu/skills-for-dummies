@@ -125,13 +125,12 @@ Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
 rejected at parse time — so `if ! codex exec ...` works, and a `2` means you
 passed something that subcommand doesn't accept.
 
-`resume` has a silent-success trap: an unknown thread *name*, or `--last` in a
-directory with no sessions, starts a **fresh, context-free session and exits
-`0`**. Only a well-formed but unknown UUID fails loudly. So a stage 2 that lost
-all of stage 1's context reports success — assert the resumed thread id rather
-than trusting the exit code. The worked two-stage recipe, including that
-assertion, is in
-[`references/patterns.md`](references/patterns.md#multi-turn-with-resume).
+`resume` has a silent-success trap: an unknown thread *name*, or `--last` with
+no session in the directory, starts a **fresh, context-free session and exits
+`0`** — so a stage 2 that lost all of stage 1's context reports success. Assert
+the resumed thread id rather than trusting the exit code; the two-stage recipe
+in [`references/patterns.md`](references/patterns.md#multi-turn-with-resume)
+does.
 
 One more way to hang: `-i/--image` is **variadic**, so
 `codex exec -i pic.png "do the thing"` consumes the prompt as a second image
@@ -166,19 +165,17 @@ The bundled script reads it and picks for you (field details in
 
 ```bash
 python3 "$SKILL_DIR/scripts/codex_pick_model.py"           # -m <strongest> -c model_reasoning_effort=xhigh
-python3 "$SKILL_DIR/scripts/codex_pick_model.py" --list    # selectable models
+python3 "$SKILL_DIR/scripts/codex_pick_model.py" --list    # inspect the catalog
 python3 "$SKILL_DIR/scripts/codex_pick_model.py" --effort max
 ```
 
-Splice it straight into a command:
+Splice it straight in — and if the catalog shape ever changes, the script exits
+non-zero with a clear message, so fall back to running without `-m` rather than
+guessing a slug:
 
 ```bash
 codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") -s read-only "<task>" < /dev/null
 ```
-
-`codex debug models` is an experimental subcommand, so the script exits
-non-zero with a clear message if the catalog shape changes — fall back to
-running without `-m` rather than guessing a slug.
 
 **Use the inline `$(...)` form, never a variable holding the flag string** —
 `MF=$(...); codex exec $MF` works in bash and breaks in zsh, where parameter
@@ -197,14 +194,14 @@ codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
 
 ### Choosing an effort level
 
-Levels run `minimal → low → medium → high → xhigh → max → ultra` (no model in
-the observed catalog supports `minimal`). **Default to `xhigh`** —
-every model in the observed catalog supports it, and it's right for anything
-worth delegating. Reach past it deliberately: `max` for genuinely hard reasoning
-like subtle concurrency bugs, `ultra` (which lets the run delegate sub-tasks of
-its own) for large open-ended work. Drop to `medium` only for mechanical calls
-where latency beats depth. Per-model support, and where this ladder diverges
-from the published docs, are in `references/flags.md`.
+Levels run `minimal → low → medium → high → xhigh → max → ultra`.
+**Default to `xhigh`** — every model in the observed catalog supports it, and
+it's right for anything worth delegating. Reach past it deliberately: `max` for
+genuinely hard reasoning like subtle concurrency bugs, `ultra` (which lets the
+run delegate sub-tasks of its own) for large open-ended work. Drop to `medium`
+only for mechanical calls where latency beats depth. Per-model support and the
+divergence from the published docs are in
+[`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
 Higher effort costs more tokens and wall-clock time. That trade is usually worth
 taking, because the expensive failure is not a slow run — it's a fast, confident,
@@ -221,20 +218,12 @@ reasoning effort: xhigh
 ```
 
 The header shows the **resolved** value — flag, then `-c`, then the user's
-`config.toml`. `none` means nothing set it anywhere and the model's own catalog
-default applies. So reading `xhigh` does *not* prove your flag landed if the
-user's config already said `xhigh`; change the value you pass if you need to be
-sure.
-
-**`--json` suppresses that header, and the event stream carries no model or
-effort fields** — verified: a `--json` run's entire stderr was one line
-("Reading additional input from stdin..."). So in JSON mode there is nothing to
-check against. Either verify the flags once with a throwaway plain run, or trust
-`codex_pick_model.py`, which prints exactly what it resolved.
-
-This is also why a silently mistyped `-c` override is dangerous: unknown config
-keys are accepted without complaint. `--strict-config` turns that into an error
-instead.
+config — so reading back `xhigh` doesn't prove *your* flag landed if their
+config already said it. `--json` suppresses the header entirely and no event
+carries model or effort, so JSON runs offer nothing to check against. And a
+mistyped `-c` key is accepted silently unless you pass `--strict-config`. Full
+resolution rules in
+[`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
 ## Set the bar before you delegate
 
@@ -301,21 +290,13 @@ safety boundary**. Choose the least privilege that lets the task finish:
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
 
 **Always pass `-s` — the default is not what you think, and running Codex
-changes it.** The built-in default is `read-only`, but a run that *starts a
-session* with a non-`read-only` sandbox makes Codex record
-`trust_level = "trusted"` for the **git repo root** of its workdir, and a bare
-`codex exec` there afterwards resolves to `workspace-write`. The entry is
-written even when the run fails, and neither `--ephemeral` nor
-`--ignore-user-config` prevents it. (Genuinely resuming an existing session does
-not write one.)
-
-Two consequences worth holding onto. **Delegating one implementation task
-permanently escalates the default for the whole repository** — a run in
-`repo/services/api` trusts all of `repo` — so a later "just answer this
-question" sent without `-s` arrives holding write access. And because the key is
-the repo root, **a git worktree does not contain this**: a write-enabled run in
-a worktree trusts the main repository. Passing `-s` on every call is the whole
-defense. Matching rules and verification in
+changes it.** Starting a session with a non-`read-only` sandbox makes Codex
+record the workdir's **git repo root** as trusted, so bare runs there afterwards
+resolve to `workspace-write`. Two consequences: delegating one implementation
+task permanently escalates the default for the *whole* repository, and a git
+worktree does **not** contain it — a write-enabled run in a worktree trusts the
+main repo. Passing `-s` on every call is the whole defense. Mechanism, matching
+rules, and verification in
 [`references/flags.md`](references/flags.md#sandbox-and-permissions).
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
@@ -324,22 +305,16 @@ escalating to full access.
 
 **`workspace-write` blocks network access by default**, which kills the most
 common delegated task there is: "fix this and run the tests" dies the moment the
-test command fetches a dependency, and nothing asks — it just fails. Install
-dependencies before invoking Codex where you can (it keeps Codex's reach
-narrower), otherwise enable it explicitly with
+test command fetches a dependency, and nothing asks. Install dependencies before
+invoking Codex where you can, otherwise pass
 `-c sandbox_workspace_write.network_access=true`.
 
-**Two subcommands can't take `-s` at all**, and neither is safe by default.
-`codex exec review` rejects `-s` outright. `codex exec resume` also rejects it
-*and* does not inherit the session's sandbox — it re-resolves from the current
-directory, so a stage 1 you deliberately ran `read-only` resumes as
-`workspace-write` in a trusted project. Model and effort don't carry either —
-re-pass `-m` and `-c model_reasoning_effort=` on every resume. Constrain the
-sandbox through config:
-
-```bash
--c sandbox_mode='"read-only"'
-```
+**`codex exec review` and `codex exec resume` reject `-s` entirely**, and
+neither is safe by default — `resume` re-resolves the sandbox from the current
+directory rather than inheriting the session's, and drops the model and effort
+too. Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
+`-c model_reasoning_effort=` on every resume. Details in
+[`references/flags.md`](references/flags.md#codex-exec-resume).
 
 `--dangerously-bypass-approvals-and-sandbox` removes the boundary entirely.
 Don't use it to make an error message go away; if a task is failing under
@@ -356,13 +331,10 @@ don't treat any `web_search` setting as containment.
 
 **If you are also editing the repo, do not give Codex `workspace-write` on it.**
 Two agents writing the same files concurrently corrupt each other's work in ways
-that are painful to untangle. Isolate it first:
-
-Isolate it in a worktree, give Codex `-C` that directory, and review the result
-against the commit you branched from — not against `main`, which would fold your
-own unmerged commits into the diff. The full recipe, including patch adoption
-and cleanup, is in
-[`references/patterns.md`](references/patterns.md#worktree-isolation).
+that are painful to untangle. Isolate it in a worktree, point Codex there with
+`-C`, and review against the commit you branched from — not `main`, which folds
+your own unmerged commits into the diff. Full recipe, patch adoption and
+cleanup: [`references/patterns.md`](references/patterns.md#worktree-isolation).
 
 ## Four shapes of delegation
 
@@ -408,36 +380,9 @@ Targets are mutually exclusive: `--uncommitted` (staged + unstaged + untracked),
 **A target flag and a prompt can't be combined**, so you cannot attach
 acceptance criteria to a targeted review — `--base main "cite file and line"`
 is rejected at parse time. When the criteria matter more than the automatic
-scoping, either use the bare-prompt form and describe the scope yourself, or
-drop to plain `codex exec` with the diff in the prompt:
-
-```bash
-# Build the diff in a THROWAWAY index so the user's staging is untouched.
-# `git add -N` in the real index would break `git stash` and make the next
-# `git commit -a` sweep in untracked files; `git reset` to undo it would
-# destroy any partial staging they had.
-TMPIDX=$(mktemp -u); DIFF=$(mktemp)
-trap 'rm -f "$TMPIDX" "$DIFF"' EXIT
-GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD
-GIT_INDEX_FILE="$TMPIDX" git add -A
-GIT_INDEX_FILE="$TMPIDX" git diff --cached HEAD > "$DIFF"
-rm -f "$TMPIDX"
-
-# An empty diff would get a confident "no issues found" that reads like a clean
-# bill of health for code Codex never saw.
-[ -s "$DIFF" ] || { echo "no uncommitted changes to review"; exit 0; }
-
-codex exec "${MODEL[@]}" --ephemeral -s read-only \
-  "Review this diff. Every finding must cite file and line, name a concrete
-   failure scenario, and carry a severity. No stylistic nitpicks." \
-  < "$DIFF" > "${TMPDIR:-/tmp}/review.md" 2> "${TMPDIR:-/tmp}/review.log"
-rm -f "$DIFF"
-```
-
-That covers staged, unstaged, and untracked — the same scope as `--uncommitted`,
-without touching the user's index. For a base-branch review, swap the last
-`git diff` for `GIT_INDEX_FILE="$TMPIDX" git diff --cached "$BASE"` against the
-fork point. Note there's no `< /dev/null`: stdin is carrying the diff.
+scoping, pipe the diff into a plain `codex exec` instead. Do that with a
+throwaway git index, or you will damage the user's staging:
+[`references/patterns.md`](references/patterns.md#reviewing-a-working-diff).
 
 **Implement** — hand over a scoped task. Needs write access, so isolate first
 (above), and always read the resulting diff yourself.
@@ -545,8 +490,8 @@ When your review and its review conflict, that disagreement is the useful signal
 Read these as needed rather than up front (`$SKILL_DIR` is set above):
 
 - **`references/flags.md`** — flag tables for `exec`, `exec resume`, and
-  `exec review`, plus useful `-c` config overrides, model catalog fields, auth,
-  exit codes, and which widely-documented flags don't actually exist.
+  `exec review`, plus `-c` config overrides, model catalog fields, auth, exit
+  codes, and the global flags that don't propagate to `exec`.
 - **`references/json-events.md`** — the `--json` JSONL event schema, item types,
   and parsing recipes. Read when you need to observe *what Codex did*, not just
   what it concluded.
