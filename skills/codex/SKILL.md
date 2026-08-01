@@ -110,16 +110,16 @@ Each piece earns its place:
 |---|---|
 | `exec` | The headless entry point. Drop it and you get the TUI (`codex`) or an interactive session (`codex resume`) that hangs your call. |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
-| `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
+| `--ephemeral` | Doesn't persist a session file — but does **not** prevent the trust write below. Skip it when you intend to `resume`. |
 | `-s read-only` | Explicit least privilege — **not redundant.** Starting a session with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
 Output splits across two streams, which is what makes this scriptable:
 
 - **stdout** — the final agent message, and nothing else. Pipe or capture this.
-- **stderr** — the run header (model, sandbox, effort, approval, cwd, session
-  id) and the live
-  progress transcript. Read it when debugging or when you need the session id.
+- **stderr** — the run header (`workdir`, `model`, `provider`, `approval`,
+  `sandbox`, `reasoning effort`, `session id`) and the live progress transcript.
+  Read it when debugging or when you need the session id.
 
 Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
 rejected at parse time — so `if ! codex exec ...` works, and a `2` means you
@@ -221,9 +221,9 @@ The header shows the **resolved** value — flag, then `-c`, then the user's
 config — so reading back `xhigh` doesn't prove *your* flag landed if their
 config already said it. `--json` suppresses the header entirely and no event
 carries model or effort, so a JSON run offers nothing to check against — verify
-the flags once with a throwaway plain run, or trust `codex_pick_model.py`, which
-prints exactly what it resolved. And note the header only proves an override was
-*parsed*: a mistyped `-c` key is accepted silently unless you pass
+the flags once with a throwaway plain run, or trust `codex_pick_model.py`,
+which prints exactly what it resolved. And the header only proves an override
+was *parsed*: a mistyped `-c` key is accepted silently unless you pass
 `--strict-config`. Full resolution rules in
 [`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 

@@ -246,9 +246,11 @@ rm -f "$DIFF"
 ```
 
 That covers staged, unstaged, and untracked — the same scope as `--uncommitted`,
-without touching the user's index. For a base-branch review, swap the last
-`git diff` for `GIT_INDEX_FILE="$TMPIDX" git diff --cached "$BASE"` against the
-fork point. Note there's no `< /dev/null`: stdin is carrying the diff.
+without touching the user's index. For a base-branch review, set
+`BASE=$(git merge-base HEAD main)` first and swap the last `git diff` for
+`GIT_INDEX_FILE="$TMPIDX" git diff --cached "$BASE"`, so the diff excludes
+commits already on the base. Note there's no `< /dev/null`: stdin carries the
+diff.
 
 ## Structured output
 
