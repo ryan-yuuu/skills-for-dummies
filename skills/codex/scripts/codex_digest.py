@@ -53,6 +53,7 @@ def parse_stream(lines):
         "completed": False,
         "failed": False,
         "errors": [],
+        "superseded_errors": [],
         "warnings": [],
         "malformed_lines": 0,
         "unmodeled_lines": 0,
@@ -79,9 +80,13 @@ def parse_stream(lines):
 
         if etype == "turn.started":
             # A new turn reopens the run: a stream cut during turn 2 must not
-            # inherit turn 1's completion, nor its failure.
+            # inherit turn 1's completion, nor its failure. Errors move aside
+            # too -- leaving them would print an "Errors:" block above a
+            # "completed" status, which reads as a contradiction.
             d["completed"] = False
             d["failed"] = False
+            d["superseded_errors"].extend(d["errors"])
+            d["errors"] = []
         elif etype == "thread.started":
             tid = event.get("thread_id")
             d["thread_id"] = tid if isinstance(tid, str) else None
@@ -273,6 +278,12 @@ def render(d, full_output=False):
         for err in d["errors"]:
             out.append(f"  {err if isinstance(err, str) else json.dumps(err)}")
 
+    if d["superseded_errors"]:
+        out.append("")
+        out.append("Errors from an earlier turn that a later turn superseded:")
+        for err in d["superseded_errors"]:
+            out.append(f"  {err if isinstance(err, str) else json.dumps(err)}")
+
     if d["warnings"]:
         out.append("")
         out.append("Warnings (not failures):")
@@ -294,16 +305,18 @@ def render(d, full_output=False):
     if d["unmodeled_lines"]:
         out.append(f"Note: {d['unmodeled_lines']} event(s) in an unrecognized shape were skipped.")
 
-    if d["in_flight"]:
-        # Always shown: a command that started and never completed is the whole
-        # reason this is tracked, and it matters most on a run that otherwise
-        # looks clean. Non-command items are summarised by type, since their
-        # label is just the type name and would read as noise.
-        cmds = [s for s in d["in_flight"] if s["type"] == "command_execution"]
-        others = {}
+    # A hung *command* is the real signal, so it is shown unconditionally --
+    # it matters most on a run that otherwise looks clean. Other item types are
+    # only reported when the run didn't finish: their completion events aren't
+    # fully characterised, so an unmatched one on a successful run is more
+    # likely a gap in this parser than a real hang.
+    cmds = [s for s in d["in_flight"] if s["type"] == "command_execution"]
+    others = {}
+    if status_of(d) != "completed":
         for s2 in d["in_flight"]:
             if s2["type"] != "command_execution":
                 others[s2["type"]] = others.get(s2["type"], 0) + 1
+    if cmds or others:
         out.append("")
         out.append("--- Started, no completion seen ---")
         for started in cmds:

@@ -142,7 +142,20 @@ def _priority_key(model):
 def best_model(models):
     """Lowest `priority` wins -- the catalog ranks strongest first (priority 1
     is described as the latest frontier agentic coding model)."""
-    ranked = sorted(selectable(models), key=_priority_key)
+    pool = selectable(models)
+    # Say so when a priority can't be ranked. Silently demoting it can select a
+    # weaker model than the catalog intends -- e.g. a float 1.0 losing to an
+    # int 2 -- which is the exact failure this script exists to prevent.
+    unrankable = [m["slug"] for m in pool
+                  if m.get("priority") is not None
+                  and (not isinstance(m.get("priority"), int) or isinstance(m.get("priority"), bool))]
+    if unrankable:
+        print(
+            f"note: unrankable priority on {', '.join(unrankable)}; treating as lowest rank. "
+            f"Check `codex debug models` before trusting the selection.",
+            file=sys.stderr,
+        )
+    ranked = sorted(pool, key=_priority_key)
     if not ranked:
         sys.exit("error: no selectable models in catalog")
     return ranked[0]
@@ -287,7 +300,7 @@ def main():
         # NOT remove quotes -- so quoting here would produce broken argv.
         # Refuse anything that couldn't survive the splice instead.
         for label, value in (("model", model["slug"]), ("effort", effort)):
-            if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            if not re.fullmatch(r"[A-Za-z0-9._][A-Za-z0-9._-]*", value):
                 sys.exit(
                     f"error: {label} '{value}' contains characters unsafe for $(...) splicing; "
                     f"use --export and quote it yourself"

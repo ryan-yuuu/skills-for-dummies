@@ -55,8 +55,8 @@ To adopt the work, cherry-pick or apply the diff — don't merge blindly:
 
 ```bash
 # `git add -N` registers new files so diff can see them, and --binary keeps
-# binary content. Plain `git diff main` silently omits both, so a patch built
-# without these loses every file Codex created — with no error.
+# binary content. Without both, a patch silently loses every file Codex
+# created — with no error. Diff against "$BASE", never `main`.
 git -C /tmp/codex-wt add -N .
 git -C /tmp/codex-wt diff --binary "$BASE" > /tmp/codex.patch
 git apply --check /tmp/codex.patch && git apply /tmp/codex.patch
@@ -412,7 +412,14 @@ permissions on the repository, have it produce a patch, and open the pull
 request from a separate job that never sees the API key:
 
 ```bash
-git add -N .
-git diff --binary HEAD > codex.patch
-[ -s codex.patch ] && echo "has_patch=true" >> "$GITHUB_OUTPUT"
+# Throwaway index: `git add -N .` on the real one would leave the checkout
+# dirty for later steps.
+TMPIDX=$(mktemp -u)
+GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD
+GIT_INDEX_FILE="$TMPIDX" git add -A
+GIT_INDEX_FILE="$TMPIDX" git diff --cached --binary HEAD > codex.patch
+rm -f "$TMPIDX"
+# `if`, not `[ ... ] && echo`: an empty patch is the normal "nothing to change"
+# outcome, and the AND-list would return 1 and abort the job under `set -e`.
+if [ -s codex.patch ]; then echo "has_patch=true" >> "$GITHUB_OUTPUT"; fi
 ```

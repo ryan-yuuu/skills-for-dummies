@@ -80,9 +80,10 @@ not from here, so script paths need it spelled out:
 SKILL_DIR="/abs/path/to/skills/codex"   # the directory you read this SKILL.md from
 ```
 
-If you don't know it, it's the directory containing the `SKILL.md` you were just
-given — locate it with `find ~ -name SKILL.md -path '*/codex/*' 2>/dev/null` and
-verify `$SKILL_DIR/scripts/codex_pick_model.py` exists before relying on it.
+If you don't know it: it's the directory holding the `SKILL.md` you're reading,
+so take the absolute path your harness gave you for this file and strip the
+filename. Confirm with `ls "$SKILL_DIR/scripts/codex_pick_model.py"` before
+relying on it.
 
 And when the repository you want Codex to work on isn't your current directory,
 point it there with `-C/--cd <DIR>`, which sets the agent's working root — and
@@ -105,7 +106,7 @@ Each piece earns its place:
 
 | Fragment | Why |
 |---|---|
-| `exec` | The headless entry point. Drop it and you get the TUI (`codex`) or a session picker (`codex resume`). |
+| `exec` | The headless entry point. Drop it and you get the TUI (`codex`) or an interactive session (`codex resume`) that hangs your call. |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
 | `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
 | `-s read-only` | Explicit least privilege — **not redundant.** Any run with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
@@ -412,6 +413,7 @@ drop to plain `codex exec` with the diff in the prompt:
 # `git commit -a` sweep in untracked files; `git reset` to undo it would
 # destroy any partial staging they had.
 TMPIDX=$(mktemp -u); DIFF=$(mktemp)
+trap 'rm -f "$TMPIDX" "$DIFF"' EXIT
 GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD
 GIT_INDEX_FILE="$TMPIDX" git add -A
 GIT_INDEX_FILE="$TMPIDX" git diff --cached HEAD > "$DIFF"
@@ -428,15 +430,15 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only \
 rm -f "$DIFF"
 ```
 
-That covers staged, unstaged, and untracked — the same scope as `--uncommitted`.
-For a base-branch review, pipe `git diff main` instead. Note there's no
-`< /dev/null` here: stdin is deliberately carrying the diff.
+That covers staged, unstaged, and untracked — the same scope as `--uncommitted`,
+without touching the user's index. For a base-branch review, swap the last
+`git diff` for `GIT_INDEX_FILE="$TMPIDX" git diff --cached "$BASE"` against the
+fork point. Note there's no `< /dev/null`: stdin is carrying the diff.
 
 **Implement** — hand over a scoped task. Needs write access, so isolate first
 (above), and always read the resulting diff yourself.
 
 ```bash
-git worktree add /tmp/codex-wt -b codex/fix-parser "$(git rev-parse HEAD)"
 codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
   -c sandbox_workspace_write.network_access=true \
   "Fix the failing test in tests/test_parser.py::test_nested_quotes. Run
@@ -444,6 +446,12 @@ codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
    Do not modify the test." \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 ```
+
+Creating the worktree, recording the fork point to diff against, adopting the
+patch, and cleanup are all in
+[`references/patterns.md`](references/patterns.md#worktree-isolation) — use it
+rather than improvising, since diffing against the wrong base silently folds
+your own commits into the patch.
 
 **Extract** — when you need typed data rather than prose, constrain the final
 message with a JSON Schema. Far more reliable than asking for JSON in the prompt:

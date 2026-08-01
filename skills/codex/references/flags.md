@@ -77,8 +77,9 @@ every repo beneath it (verified). Verified: a hand-written `[projects."<repo>/su
 auditing only repo-root entries under-predicts where write access already
 exists.
 
-Otherwise: a nested repo inside a trusted repo is *not* trusted, a subdirectory
-of a trusted root is, a worktree resolves to its main repo's root (inheriting
+Otherwise: a nested repo inside a trusted repo is *not* trusted; a subdirectory
+of a trusted root is — not by prefix, but because its repo root is the trusted
+key; a worktree resolves to its main repo's root (inheriting
 trust and writing trust there), and `-C/--cd` selects the directory checked
 rather than your shell's cwd. Trust does not relax the network block.
 
@@ -370,9 +371,9 @@ On `tool_mode=code_mode_only` models (all `gpt-5.6-*`) no `tools` array is sent
 at all, no `web_search` appears anywhere in the request, and every setting above
 is a no-op.
 
-Two consequences. External web access is off by default only while the sandbox
-is `read-only` or `workspace-write`; choosing `danger-full-access` turns it on
-without you asking. And on the `gpt-5.6-*` models — which include the strongest
+Two consequences. On `tool_mode=null` models, external web access is off by
+default only while the sandbox is `read-only` or `workspace-write`; choosing
+`danger-full-access` turns it on without you asking. And on the `gpt-5.6-*` models — which include the strongest
 one this skill selects — the client sends no `web_search` tool at all, so
 `-c web_search='"disabled"'` is a **no-op there**; don't treat it as a
 containment control on those models.
