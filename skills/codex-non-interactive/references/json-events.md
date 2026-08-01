@@ -5,6 +5,9 @@ progresses. Use it when you need to know *what Codex did* — which commands ran
 which files changed, what it cost. When you only need the conclusion, plain mode
 is simpler, because there stdout is already just the final message.
 
+`$SKILL_DIR` below is the directory holding this skill's `SKILL.md`; set it as
+shown there. Recipes use `jq`.
+
 ## Contents
 
 - [Envelope types](#envelope-types)
@@ -167,7 +170,7 @@ For a single readable summary instead of separate queries, use the bundled
 script, which applies the last-message rule and truncates command output:
 
 ```bash
-python3 scripts/codex_digest.py run.jsonl
+python3 "$SKILL_DIR/scripts/codex_digest.py" run.jsonl
 ```
 
 ## Failure handling

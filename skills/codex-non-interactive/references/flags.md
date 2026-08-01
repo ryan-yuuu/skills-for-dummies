@@ -12,7 +12,8 @@ Flag surfaces move between releases — when something is rejected, run
 - [Model selection and reasoning effort](#model-selection-and-reasoning-effort)
 - [Config overrides with `-c`](#config-overrides-with--c)
 - [Authentication](#authentication)
-- [Documented flags that don't exist here](#documented-flags-that-dont-exist-here)
+- [Global flags that don't propagate to `exec`](#global-flags-that-dont-propagate-to-exec)
+- [Diagnosing a broken environment](#diagnosing-a-broken-environment)
 - [Exit codes and failure modes](#exit-codes-and-failure-modes)
 
 ## `codex exec`
@@ -39,8 +40,23 @@ piped *and* a prompt argument is present, the piped content is appended as a
 
 | Flag | Effect |
 |---|---|
-| `-s, --sandbox <MODE>` | `read-only`, `workspace-write`, `danger-full-access`. `exec` pins `read-only` when unset — it does *not* inherit the interactive default, which can resolve to `workspace-write`. |
+| `-s, --sandbox <MODE>` | `read-only`, `workspace-write`, `danger-full-access`. The built-in default is `read-only`, but user config overrides it — see below. |
 | `--add-dir <DIR>` | Extra writable directory alongside the workspace. Prefer this over escalating to full access. |
+| `--dangerously-bypass-approvals-and-sandbox` | No sandbox at all. Only inside an externally sandboxed environment. |
+| `--dangerously-bypass-hook-trust` | Runs enabled hooks without persisted trust. Only when hook sources are already vetted. |
+| `--skip-git-repo-check` | Allow running outside a Git repository. |
+
+**Project trust silently changes the default sandbox.** Verified — the same
+`codex exec` with no `-s`:
+
+| Working directory | Reported sandbox |
+|---|---|
+| Untrusted directory | `read-only` |
+| Project with `trust_level = "trusted"` in `~/.codex/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
+| Any directory, with `--ignore-user-config` | `read-only` |
+
+Trust entries accumulate as users work in projects, so this is the common case
+on a developer machine rather than an exotic one. Always pass `-s` explicitly.
 
 **`workspace-write` blocks network access by default.** Verified with
 `codex sandbox`: `curl` under `workspace-write` couldn't resolve DNS, and
@@ -51,9 +67,6 @@ Enable it deliberately:
 ```bash
 codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "<task>" < /dev/null
 ```
-| `--dangerously-bypass-approvals-and-sandbox` | No sandbox at all. Only inside an externally sandboxed environment. |
-| `--dangerously-bypass-hook-trust` | Runs enabled hooks without persisted trust. Only when hook sources are already vetted. |
-| `--skip-git-repo-check` | Allow running outside a Git repository. |
 
 `--full-auto` still parses but warns: *"`--full-auto` is deprecated; use
 `--sandbox workspace-write` instead."* Use the explicit flag.

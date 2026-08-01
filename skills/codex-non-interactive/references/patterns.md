@@ -10,9 +10,12 @@ single argument and the run dies with an opaque HTTP 400. See the model section
 in `SKILL.md` for why the defaults are worth overriding at all.
 
 ```bash
+SKILL_DIR="/abs/path/to/skills/codex-non-interactive"   # this skill's directory
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
 MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
 ```
+
+Several recipes use `jq`.
 
 ## Contents
 
@@ -139,8 +142,9 @@ Note there is no `< /dev/null` here — stdin is deliberately in use.
 file generates the entire instruction:
 
 ```bash
-cat prompt.txt | codex exec -
-printf 'Summarize this log in 3 bullets:\n\n%s\n' "$(tail -n 200 app.log)" | codex exec -
+cat prompt.txt | codex exec "${MODEL[@]}" -
+printf 'Summarize this log in 3 bullets:\n\n%s\n' "$(tail -n 200 app.log)" \
+  | codex exec "${MODEL[@]}" -
 ```
 
 Since stdout is just the final message, Codex composes with ordinary Unix tools:

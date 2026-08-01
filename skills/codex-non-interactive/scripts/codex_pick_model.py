@@ -29,10 +29,14 @@ Usage:
     python3 codex_pick_model.py --slug-only     # just the model slug
     python3 codex_pick_model.py --list          # show selectable models
 
+Exit status: 0 on success, 1 when the catalog can't be loaded or the requested
+model isn't selectable, 2 for bad arguments.
+
 Effort defaults to `xhigh`. If the chosen model doesn't support the requested
-level, this resolves *downward* to the strongest level it does support -- never
-upward, so a request can't silently become more expensive than what was asked
-for. It only goes above the request when the model supports nothing lower.
+level, this resolves *downward* to the strongest level it does support, so a
+request can't silently become more expensive than what was asked for. It goes
+above the request only when the model supports nothing lower, and says which
+way it went on stderr either way.
 """
 
 import argparse
@@ -72,7 +76,7 @@ def load_catalog(bundled_only=False):
             last_err = f"could not run `{' '.join(cmd)}`: {exc}"
             continue
         if proc.returncode != 0:
-            last_err = (proc.stderr or "").strip() or f"exit {proc.returncode}"
+            last_err = ((proc.stderr or "").strip() or f"exit {proc.returncode}") if not last_err else last_err
             continue
         try:
             payload = json.loads(proc.stdout)
@@ -99,7 +103,10 @@ def selectable(models):
     `visibility: hide` marks internal entries (e.g. codex-auto-review) that
     aren't meant to be selected directly.
     """
-    return [m for m in models if m.get("visibility") == "list" and isinstance(m.get("slug"), str)]
+    # Absent `visibility` counts as selectable: only an explicit "hide" should
+    # exclude, so a catalog that drops the field degrades to "everything" rather
+    # than to "nothing selectable".
+    return [m for m in models if m.get("visibility") != "hide" and isinstance(m.get("slug"), str)]
 
 
 def _priority_key(model):
@@ -128,6 +135,12 @@ def supported_efforts(model, warn=False):
     raw = [lvl.get("effort") for lvl in levels if isinstance(lvl, dict) and isinstance(lvl.get("effort"), str)]
     known = [e for e in EFFORT_ORDER if e in raw]
     if known:
+        unknown = [e for e in raw if e not in EFFORT_ORDER]
+        if unknown and warn:
+            print(
+                f"note: ignoring unrecognized effort name(s) in catalog: {', '.join(unknown)}",
+                file=sys.stderr,
+            )
         return known
     if raw and warn:
         # The catalog renamed the vocabulary. Preserve its ordering rather than
@@ -154,17 +167,22 @@ def resolve_effort(model, requested):
     if requested in available:
         return requested
 
-    if requested in EFFORT_ORDER and all(a in EFFORT_ORDER for a in available):
+    if all(a in EFFORT_ORDER for a in available):
         cutoff = EFFORT_ORDER.index(requested)
         lower = [a for a in available if EFFORT_ORDER.index(a) < cutoff]
         choice = lower[-1] if lower else available[0]
     else:
         choice = available[0]
 
-    direction = "down" if EFFORT_ORDER.index(choice) < EFFORT_ORDER.index(requested) else "up"
+    # `choice` may be a catalog-native name absent from EFFORT_ORDER, so only
+    # claim a direction when both names are rankable.
+    if choice in EFFORT_ORDER and requested in EFFORT_ORDER:
+        direction = "down " if EFFORT_ORDER.index(choice) < EFFORT_ORDER.index(requested) else "up "
+    else:
+        direction = ""
     print(
         f"note: {model.get('slug', '?')} does not support effort '{requested}'; "
-        f"resolving {direction} to '{choice}' (supports: {', '.join(available)})",
+        f"resolving {direction}to '{choice}' (supports: {', '.join(available)})",
         file=sys.stderr,
     )
     return choice
@@ -176,12 +194,15 @@ def render_list(models):
     width = max((len(m["slug"]) for m in rows), default=10)
     out = [f"{'PRIO':<5} {'MODEL':<{width}}  {'DEFAULT':<8} EFFORTS"]
     for m in rows:
-        out.append(
-            f"{m.get('priority', '?'):<5} {m['slug']:<{width}}  "
-            f"{m.get('default_reasoning_level', '?'):<8} {','.join(supported_efforts(m))}"
-        )
+        # A key present with a JSON null survives .get(k, default), so coerce
+        # rather than relying on the default -- the live catalog does ship nulls.
+        prio = m.get("priority")
+        prio = str(prio) if isinstance(prio, (int, str)) and not isinstance(prio, bool) else "?"
+        level = m.get("default_reasoning_level")
+        level = level if isinstance(level, str) else "?"
+        out.append(f"{prio:<5} {m['slug']:<{width}}  {level:<8} {','.join(supported_efforts(m))}")
     if hidden:
-        out.append(f"({hidden} hidden entr{'y' if hidden == 1 else 'ies'} omitted -- visibility != \"list\")")
+        out.append(f"({hidden} entr{'y' if hidden == 1 else 'ies'} omitted -- not selectable)")
     return "\n".join(out)
 
 

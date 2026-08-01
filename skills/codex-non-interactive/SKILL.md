@@ -3,19 +3,22 @@ name: codex-non-interactive
 description: >-
   Delegate work to the OpenAI Codex CLI (`codex exec`) from an agent session,
   running it headless so it never opens the interactive TUI. Use this skill
-  whenever you want to hand a task, a question, or a half-formed idea to Codex:
-  getting a second opinion or an independent review of a diff, design, or plan;
-  delegating a scoped implementation; brainstorming approaches with a different
-  model; critiquing an architecture; extracting structured data; or fanning out
-  analysis across a codebase. Trigger it when the user says "ask codex", "get
-  codex's opinion", "have codex review this", "have codex implement/check
-  this", "run codex", "second opinion", "see what another model thinks", or
-  mentions `codex exec`, codex in CI, headless codex, or scripting codex. Also
-  consult it before running any `codex` shell command yourself, because
+  whenever you want to hand a task, a question, or a half-formed idea to
+  Codex — have Codex review a diff, design, or plan; have Codex implement a
+  scoped change; ask Codex for a second opinion or an independent critique of
+  an architecture; get Codex to extract structured data; or fan several Codex
+  runs out across a codebase in parallel. Trigger it when the user says "ask
+  codex", "get codex's opinion", "have codex review this", "have codex
+  implement/check this", "run codex", "delegate this to codex", "second
+  opinion", "see what another model thinks", or mentions `codex exec`, `codex
+  review`, `codex resume`, codex in CI, headless codex, or scripting codex.
+  Also consult it before running any `codex` shell command yourself, because
   invoking bare `codex` from an agent launches an interactive UI that hangs the
-  session with no way to recover. Covers the safe invocation contract, sandbox
-  selection, output capture, resuming sessions, and verifying what Codex hands
-  back.
+  session with no way to recover. This is specifically the `codex` binary — not
+  the OpenAI API or SDK, not another agent's CLI, and not work you should
+  simply do yourself. Covers the safe invocation contract, model and effort
+  selection, sandbox choice, output capture, parallelism, resuming sessions,
+  and verifying what Codex hands back.
 ---
 
 # Delegating to Codex
@@ -57,7 +60,7 @@ Paths below are written relative to this skill's directory. You'll be running
 throughout:
 
 ```bash
-SKILL_DIR=/path/to/skills/codex-non-interactive
+SKILL_DIR="/abs/path/to/skills/codex-non-interactive"   # this skill's directory
 ```
 
 The safe baseline, which you can copy and adjust:
@@ -74,7 +77,7 @@ Each piece earns its place:
 | `exec` | The headless entry point. Without it you get the TUI. |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
 | `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
-| `-s read-only` | Explicit least privilege. It's also the default, but stating it documents intent and survives a user config that changed the default. |
+| `-s read-only` | Explicit least privilege — **not redundant.** The effective default depends on user config: in a project the user has trusted, `exec` silently gets `workspace-write`. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
 Output splits across two streams, which is what makes this scriptable:
@@ -136,15 +139,13 @@ MF=$(python3 "$SKILL_DIR/scripts/codex_pick_model.py")
 codex exec $MF ...        # WRONG — works in bash, breaks in zsh
 ```
 
-Command substitution word-splits in both bash and zsh, but *parameter* expansion
-word-splits only in bash. Under zsh, `$MF` arrives as a single argument, so `-m`
-receives the literal string `" gpt-5.6-sol -c model_reasoning_effort=xhigh"` and
-the run dies with an opaque HTTP 400 about an unsupported model. Since zsh is
-the default shell on macOS, and Codex itself spawns commands via `/bin/zsh -lc`,
-assume zsh semantics.
+Command substitution word-splits in both shells; *parameter* expansion splits
+only in bash. Under zsh `$MF` arrives as one argument, so `-m` swallows the
+whole string and the run dies with an opaque HTTP 400. Assume zsh semantics —
+it's the macOS default and Codex spawns its own commands through it.
 
-To resolve the catalog once and reuse it — in a loop, or across several calls —
-use `--export`, which keeps every value individually quoted:
+To resolve once and reuse — in a loop, or across several calls — use `--export`,
+which keeps each value separately quoted:
 
 ```bash
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
@@ -156,8 +157,9 @@ codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
 
 Levels run `low → medium → high → xhigh → max → ultra`, and support varies by
 model — the script resolves an unsupported request *downward* to the model's
-best supported level, never upward, so a request can't silently cost more than
-you asked for. (The published docs stop at `xhigh` and don't list `max`/`ultra`;
+best supported level, going higher only when the model supports nothing lower,
+and saying which way on stderr. So a request won't silently cost more than you
+asked for. (The published docs stop at `xhigh` and don't list `max`/`ultra`;
 the binary has them. See `references/flags.md`.)
 
 **Default to `xhigh`.** Every model in the observed catalog supports it, and
@@ -201,9 +203,9 @@ what makes the grading honest.
 
 The order matters. A bar set *after* seeing the output isn't a bar; it's a
 rationalization. The characteristic failure of delegation is that Codex returns
-something articulate and 80% right, and because it reads well and you're already
-invested in the result, you accept the missing 20%. Deciding the target while
-you still have no output to be attached to is the defense against that.
+something articulate and 80% right, and because it reads well you accept the
+missing 20%. Deciding the target before there's any output to be attached to is
+the defense.
 
 A usable bar is specific and checkable. Vague targets can't fail, which is
 exactly what makes them useless:
@@ -222,11 +224,10 @@ The bar then does double duty:
 2. **It's your checklist afterward.** You grade the output against the list you
    wrote, item by item.
 
-Hold it without flinching. When the returned work misses the bar, the options
-are to re-delegate with a sharper prompt, close the gap yourself, or tell the
-user plainly what fell short — never to quietly lower the bar to fit what came
-back. If you find yourself arguing that a criterion "wasn't really necessary,"
-that's the moment the discipline exists for.
+When the returned work misses the bar, re-delegate with a sharper prompt, close
+the gap yourself, or tell the user plainly what fell short — don't quietly lower
+the bar to fit what came back. Catching yourself arguing that a criterion
+"wasn't really necessary" is the signal.
 
 ## Write a prompt for someone with amnesia
 
@@ -260,9 +261,22 @@ safety boundary**. Choose the least privilege that lets the task finish:
 
 | Mode | Codex can | Use for |
 |---|---|---|
-| `read-only` *(default)* | Read files, run read-only commands | Questions, review, design critique, brainstorming, analysis — most delegation |
+| `read-only` | Read files, run read-only commands | Questions, review, design critique, brainstorming, analysis — most delegation |
 | `workspace-write` | Also write inside the workspace | Delegated implementation, refactors, fixes |
 | `danger-full-access` | Anything, unsandboxed | Only inside a disposable container/VM |
+
+**Always pass `-s` — the default is not what you think.** The built-in default
+is `read-only`, but user config overrides it, and *project trust* is part of
+that config. Verified: the same `codex exec` command with no `-s` reports
+`sandbox: read-only` in an untrusted directory and
+`sandbox: workspace-write` inside a project recorded as
+`trust_level = "trusted"` in `~/.codex/config.toml`. Users accumulate trusted
+projects just by working in them.
+
+So an omitted `-s` means a delegated "just answer this question" can arrive
+holding write access to the user's repository. `--ignore-user-config` also
+restores `read-only`, but naming the sandbox you want is clearer than relying on
+that side effect.
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
 answer when `workspace-write` is *almost* enough — reach for it instead of
@@ -332,7 +346,8 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only \
 scope itself to changes:
 
 ```bash
-codex exec review "${MODEL[@]}" --base main --ephemeral < /dev/null
+codex exec review "${MODEL[@]}" --base main -c sandbox_mode='"read-only"' \
+  --ephemeral < /dev/null
 ```
 
 Targets are mutually exclusive: `--uncommitted` (staged + unstaged + untracked),
@@ -367,28 +382,20 @@ A real Codex task runs for minutes, often past a default command timeout — and
 timeout kills the run with nothing to show for the tokens already spent. Two
 mechanisms cover this, and they compose:
 
-**1. Background the tool call.** Detach it so you keep working and get notified
-when it exits. This is the right default for a single long task: it doesn't
-block you, and it doesn't depend on guessing a timeout correctly. Prefer it to
-simply raising the timeout, which trades one blocking wait for a longer one.
+| Mechanism | How | Use when |
+|---|---|---|
+| **Background the tool call** | Your harness's own backgrounding — in Claude Code, the Bash tool's `run_in_background` parameter | A single long task. You keep working, get notified on exit, and never guess a timeout. |
+| **Fan out inside one call** | Shell `&` … `wait` | Several runs that form one unit of work; reports back once when the batch finishes. |
 
-**2. Fan out inside one call**, with `&` and `wait` — several runs concurrently,
-reporting back once when the batch finishes. Use it when the runs form a single
-unit of work.
+The distinction is easy to collapse: reaching for `&` when you meant the first
+one gives the harness a command that returns instantly, so it stops tracking the
+work and you get no notification. Prefer backgrounding to simply raising the
+timeout, which trades one blocking wait for a longer one.
 
-```bash
-for area in auth billing search; do
-  codex exec "${MODEL[@]}" --ephemeral -s read-only \
-    "Audit src/$area/ for error-handling gaps. List findings, most severe first." \
-    < /dev/null > "audit-$area.md" 2> "audit-$area.log" &
-done
-wait
-```
-
-They compose in two useful ways. One backgrounded call that fans out internally
-gives you N parallel runs and a single notification. Backgrounding N separate
-calls instead gives N notifications, so you can act on each result as it lands
-rather than waiting for the slowest.
+They compose. One backgrounded call that fans out internally gives N parallel
+runs and a single notification; backgrounding N separate calls gives N
+notifications, so you can act on each result as it lands rather than waiting for
+the slowest. Worked fan-out recipe in `references/patterns.md`.
 
 Three constraints apply either way:
 

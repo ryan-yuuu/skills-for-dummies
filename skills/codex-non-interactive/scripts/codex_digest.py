@@ -13,11 +13,16 @@ Usage:
 Options:
     --full-output   Include output for successful commands, and don't truncate.
                     (Failed commands always show output, truncated by default.)
-    --json          Emit the digest as JSON instead of text.
+    --json          Emit the digest as JSON instead of text. Like the text form,
+                    this truncates command output and keeps only the final
+                    agent message (with `omitted_messages` counting the rest)
+                    unless --full-output is passed.
 
-Exit status is 0 only for a run that reached `turn.completed` without errors.
-A failed run, or one whose stream was cut off (timeout, kill), exits 1 -- so it
-can gate a pipeline directly.
+Exit status:
+    0   reached `turn.completed` with no errors
+    1   failed, or the stream was cut off (timeout, kill) -- so it can gate a
+        pipeline directly
+    2   the input file could not be read, or bad arguments
 """
 
 import argparse
@@ -51,6 +56,7 @@ def parse_stream(lines):
         "malformed_lines": 0,
         "other_items": {},
         "in_flight": [],
+        "_completed_ids": set(),
     }
 
     for line in lines:
@@ -98,15 +104,21 @@ def parse_stream(lines):
             if isinstance(item, dict):
                 label = item.get("command") or item.get("type") or "?"
                 d["in_flight"].append({"id": item.get("id"), "label": str(label)})
+            else:
+                d["malformed_lines"] += 1
 
-    # Anything that also completed is no longer in flight.
-    done = {c.get("id") for c in d["commands"]} | {f.get("id") for f in d["file_changes"]}
-    d["in_flight"] = [s for s in d["in_flight"] if s["id"] not in done]
+    # Anything that also completed is no longer in flight. Match on every
+    # completed id, not just commands and file changes -- item types the digest
+    # doesn't model (reasoning, mcp_tool_call, web_search) also start and
+    # complete, and would otherwise be reported as hung on a clean run.
+    done = {i for i in d.pop("_completed_ids") if i is not None}
+    d["in_flight"] = [s for s in d["in_flight"] if s["id"] is None or s["id"] not in done]
     return d
 
 
 def _collect_item(d, item):
     itype = item.get("type")
+    d["_completed_ids"].add(item.get("id"))
 
     if itype == "agent_message":
         text = item.get("text")
@@ -120,7 +132,7 @@ def _collect_item(d, item):
                 "id": item.get("id"),
                 "command": str(item.get("command", "")),
                 "exit_code": item.get("exit_code"),
-                "output": item.get("aggregated_output") or "",
+                "output": item.get("aggregated_output") if isinstance(item.get("aggregated_output"), str) else "",
             }
         )
     elif itype == "file_change":
@@ -146,7 +158,7 @@ def _collect_item(d, item):
 
 
 def truncate_output(text, full=False):
-    if not text:
+    if not isinstance(text, str) or not text:
         return []
     lines = text.rstrip("\n").split("\n")
     if full:
@@ -268,11 +280,12 @@ def as_json(d, full_output=False):
     payload["commands"] = [
         {**c, "output": "\n".join(truncate_output(c["output"], full_output))} for c in d["commands"]
     ]
+    # Narration is available via the count; carrying every progress message
+    # defeats the point of a digest. Emit the key unconditionally so consumers
+    # see a stable schema regardless of flags.
+    payload["omitted_messages"] = 0 if full_output else max(0, len(d["messages"]) - 1)
     if not full_output:
-        # Narration is available via the text renderer's count; carrying every
-        # progress message defeats the point of a digest.
         payload["messages"] = d["messages"][-1:]
-        payload["omitted_messages"] = max(0, len(d["messages"]) - 1)
     return payload
 
 
