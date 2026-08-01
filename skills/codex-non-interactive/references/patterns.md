@@ -85,8 +85,8 @@ codex exec "${MODEL[@]}" --json -s workspace-write \
 
 SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id' stage1.jsonl)
 
-# Stage 2 — inherits the analysis, the sandbox, and the model from stage 1
-codex exec resume "$SESSION" \
+# Stage 2 — inherits the conversation, but NOT the sandbox/model/effort
+codex exec resume "$SESSION" "${MODEL[@]}" -c sandbox_mode='"workspace-write"' \
   "Fix the highest-severity race condition you identified. Leave the rest." \
   < /dev/null
 ```
@@ -94,16 +94,15 @@ codex exec resume "$SESSION" \
 Three things that bite:
 
 - **`--ephemeral` makes a run unresumable.** Drop it when you plan a stage 2.
-- **`resume` has no `-s/--sandbox` flag, and inherits the original session's
-  sandbox.** Verified: resuming a `workspace-write` session reports
-  `sandbox: workspace-write` with no flag passed. So a follow-up you think of as
-  "just a question" still carries write access, and conversely a session started
-  `read-only` cannot be upgraded with `-s`. Plan the sandbox at stage 1.
-- **Model and effort are inherited too**, so a session started on a weak model
-  stays weak. Set them at stage 1, or re-pass `-m` and
-  `-c model_reasoning_effort=` on the resume.
+- **`resume` does not inherit the sandbox, and has no `-s` flag to set one.**
+  It re-resolves the default for the current directory, so in a trusted project
+  a stage 1 you deliberately ran `read-only` comes back as `workspace-write`.
+  Verified in both directions — a `danger-full-access` stage 1 also resumes as
+  `workspace-write`. Stage 1's choice simply doesn't carry.
+- **Model and effort don't carry either.** They resolve from flags and config on
+  every resume, so re-pass them each time.
 
-To tighten a resumed run, override the config key directly — verified to work:
+Because nothing carries, set the sandbox explicitly on *every* resume:
 
 ```bash
 codex exec resume "$SESSION" -c sandbox_mode='"read-only"' "<follow-up>" < /dev/null
@@ -229,10 +228,13 @@ produce agreeable output; asking for the strongest case *against* surfaces the
 disagreement you're actually paying for.
 
 Raise effort here rather than accepting the default — finding the real objection
-is exactly the kind of work that rewards deeper reasoning:
+is exactly the kind of work that rewards deeper reasoning. Ask the script for
+`max` rather than hardcoding it, so it resolves down if the model tops out
+lower:
 
 ```bash
-codex exec -m "$CODEX_MODEL" -c model_reasoning_effort=max --ephemeral -s read-only \
+eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --effort max --export)"
+codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" --ephemeral -s read-only \
   "Read docs/rfc-caching.md and the code in src/cache/.
    Argue the strongest case AGAINST this design, grounded in what the code
    actually does. Name concrete failure scenarios with file and line.

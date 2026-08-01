@@ -26,7 +26,7 @@ item events in between:
 {"type":"turn.started"}
 {"type":"item.started","item":{...}}
 {"type":"item.completed","item":{...}}
-{"type":"turn.completed","usage":{"input_tokens":29971,"cached_input_tokens":19200,"output_tokens":89,"reasoning_output_tokens":0}}
+{"type":"turn.completed","usage":{"input_tokens":29971,"cached_input_tokens":19200,"cache_write_input_tokens":0,"output_tokens":89,"reasoning_output_tokens":13}}
 ```
 
 | Type | Meaning |
@@ -151,8 +151,12 @@ jq -r 'select(.type=="item.completed" and .item.type=="file_change")
 Did any command fail?
 
 ```bash
-jq -e 'select(.item.type=="command_execution" and .item.exit_code != null and .item.exit_code != 0)' run.jsonl
+jq -e 'select(.type=="item.completed" and .item.type=="command_execution"
+              and .item.exit_code != null and .item.exit_code != 0)' run.jsonl
 ```
+
+`jq -e` exits `4` when nothing matches, not `1` — fine inside `if !` or `&&`,
+but don't test it against `1`.
 
 Token usage:
 

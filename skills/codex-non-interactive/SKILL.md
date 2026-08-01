@@ -86,7 +86,9 @@ Output splits across two streams, which is what makes this scriptable:
 - **stderr** — the run header (model, sandbox, cwd, session id) and the live
   progress transcript. Read it when debugging or when you need the session id.
 
-Exit code is `0` on success and `1` on failure, so `if ! codex exec ...` works.
+Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
+rejected at parse time — so `if ! codex exec ...` works, and a `2` means you
+passed something that subcommand doesn't accept.
 
 ## Always set the model and the effort
 
@@ -292,10 +294,11 @@ invoking Codex (better, keeps its reach narrow) or enable network explicitly:
 -c sandbox_workspace_write.network_access=true
 ```
 
-**Two subcommands can't take `-s` at all.** `codex exec resume` inherits the
-original session's sandbox — so a follow-up you think of as "just a question"
-still carries write access — and `codex exec review` rejects `-s` outright. For
-both, constrain them through config instead:
+**Two subcommands can't take `-s` at all**, and neither is safe by default.
+`codex exec review` rejects `-s` outright. `codex exec resume` also rejects it
+*and* does not inherit the session's sandbox — it re-resolves from the current
+directory, so a stage 1 you deliberately ran `read-only` resumes as
+`workspace-write` in a trusted project. Constrain both through config:
 
 ```bash
 -c sandbox_mode='"read-only"'
@@ -373,8 +376,8 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only --output-schema schema.json \
   -o result.json "Extract project metadata." < /dev/null
 ```
 
-`--output-schema` takes a file path, not inline JSON. `-o/--output-last-message`
-writes the final message to a file *and* still prints it to stdout.
+`--output-schema` takes a file path, not inline JSON. Worked schema, and how to
+constrain a `review` this way, in `references/patterns.md#structured-output`.
 
 ## Long runs, and running several at once
 
@@ -492,8 +495,6 @@ is wrong — it beats any documentation including this file. One caveat: some
 accepted flags are hidden (`--full-auto`, `--yolo`, `--experimental-json`), so
 `--help` proves a flag exists but never proves one doesn't.
 
-Behaviors here were verified against **codex-cli 0.146.0**. Two genuine
-divergences from the published docs are worth knowing: `-a/--ask-for-approval`
-and `--search` exist on `codex` but are rejected by `codex exec`, and the effort
-ladder runs past the documented `xhigh` to `max` and `ultra`. Re-check rather
-than assuming these still hold.
+Behaviors here were verified against **codex-cli 0.146.0**; divergences from the
+published docs are catalogued in `references/flags.md`. Re-check rather than
+assuming they still hold.

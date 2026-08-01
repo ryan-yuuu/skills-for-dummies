@@ -32,7 +32,7 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | Flag | Effect |
 |---|---|
 | `--json` | Emit JSONL events on stdout, one per line. See `json-events.md`. |
-| `-o, --output-last-message <FILE>` | Write the final message to `FILE`. Still prints to stdout. |
+| `-o, --output-last-message <FILE>` | Write the final message to `FILE`. Also prints to stdout *in plain mode*; under `--json` stdout is the event stream, so the file is the only place the final message appears on its own. |
 | `--output-schema <FILE>` | Path to a JSON Schema file constraining the final response. Path only — not inline JSON. |
 | `--color <always\|never\|auto>` | Default `auto`. Use `never` when capturing to a file that something else parses. |
 
@@ -116,12 +116,14 @@ Accepts `-c`, `-m`, `-i`, `--json`, `-o`, `--output-schema`, `--ephemeral`,
 `--skip-git-repo-check`, `--enable/--disable`, and the two `--dangerously-*`
 flags.
 
-**`resume` has no `-s/--sandbox` flag, and it inherits the original session's
-sandbox.** Verified: resuming a session that ran `workspace-write` produced a
-header reading `sandbox: workspace-write [workdir, /tmp, $TMPDIR]` without any
-sandbox flag being passed. This is a real footgun — a follow-up prompt you think
-of as "just a question" still carries write access. There is also no `-C/--cd`,
-`--add-dir`, `--color`, `-p/--profile`, `--oss`, or `--local-provider`.
+**`resume` has no `-s/--sandbox` flag, and it does *not* inherit the original
+session's sandbox** — it re-resolves the default for the current directory,
+which in a trusted project is `workspace-write` (see the trust table above).
+Verified in both directions: a session started `-s read-only` came back as
+`workspace-write` on resume, and one started `-s danger-full-access` also came
+back as `workspace-write`. So resuming can silently *escalate* a deliberately
+restricted session. There is also no `-C/--cd`, `--add-dir`, `--color`,
+`-p/--profile`, `--oss`, or `--local-provider`.
 
 To constrain a resumed run, override the config key directly:
 
@@ -129,8 +131,9 @@ To constrain a resumed run, override the config key directly:
 codex exec resume "$SESSION" -c sandbox_mode='"read-only"' "<follow-up>" < /dev/null
 ```
 
-Model and reasoning effort are likewise inherited, so a session started on a
-weak model stays there unless you re-pass `-m` and `-c model_reasoning_effort=`.
+Model and reasoning effort are **not** inherited either — they resolve from
+flags and config on every resume. Re-pass `-m` and `-c model_reasoning_effort=`
+on each resume if you want them held steady.
 
 Resuming requires a persisted session, so a run started with `--ephemeral`
 cannot be resumed.
@@ -245,10 +248,15 @@ so strings generally need quotes that survive your shell.
 | `-c model="gpt-5.6-sol"` | Equivalent to `-m`. |
 | `-c sandbox_mode='"read-only"'` | Set the sandbox where no `-s` flag exists — notably on `resume`. Verified. |
 | `-c shell_environment_policy.inherit=all` | Control which environment variables reach spawned commands. |
-| `-c 'sandbox_permissions=["disk-full-read-access"]'` | Fine-grained sandbox permissions. |
+| `-c sandbox_workspace_write.network_access=true` | Allow network under `workspace-write`. |
 
-In plain mode the stderr header echoes the effective model, sandbox, approval
-policy, reasoning effort, and session id. Read it to confirm an override
+`sandbox_permissions` appears in codex's own `-c` help text but is **not a
+recognized key** in 0.146.0 — `--strict-config` rejects it exactly like a
+nonsense key, and without that flag it is accepted and silently does nothing.
+
+In plain mode the stderr header echoes the effective model, sandbox, reasoning
+effort, and session id. (Its `approval:` line reflects config, not the effective
+policy — `exec` injects `never` regardless, since nothing can approve.) Read it to confirm an override
 actually landed — unrecognized `-c` keys are otherwise accepted silently, which
 `--strict-config` converts into an error.
 
@@ -292,10 +300,12 @@ version mismatch:
 | `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
 | `--search` | Yes | **Rejected** | `-c web_search='"live"'` — see below. |
 
-**Web search isn't off under `exec`.** The `web_search` config defaults to
-`"cached"`, so cached retrieval is already active; `-c web_search='"live"'`
-switches to live browsing. A full-access sandbox defaults it to `"live"` on its
-own, so `danger-full-access` silently enables live web retrieval too.
+**Web search isn't simply off under `exec`.** `web_search` is a valid config key
+accepting `disabled`/`cached`/`indexed`/`live`, and upstream documents the
+default as `"cached"` with full-access sandboxes promoting it to `"live"`.
+Neither default was observable from this build — captured request bodies carried
+no `tools` entry at all — so treat `-c web_search='"live"'` as the toggle and
+the defaults as unverified.
 
 ### Hidden flags
 
