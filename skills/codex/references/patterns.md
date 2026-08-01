@@ -122,8 +122,13 @@ Three things that bite:
   every resume, so re-pass them each time.
 
 `resume` also has no `-C/--cd`, and it resolves the sandbox from the directory
-you invoke it in — so to continue a worktree-isolated run you must `cd` into the
-worktree first. Otherwise the worktree and resume patterns don't compose.
+you invoke it in. Note that `cd`-ing into the worktree does **not** give you
+`read-only`: a worktree resolves to its main repo's root, which stage 1 just
+marked trusted. Set the sandbox explicitly rather than relying on location.
+
+Note that a `workspace-write` stage 2 permanently trusts this repo's root, so
+later bare runs here default to `workspace-write`. Use `read-only` for stage 2
+whenever the follow-up doesn't actually need to write.
 
 Because nothing carries, set the sandbox explicitly on *every* resume:
 
@@ -148,12 +153,15 @@ same applies to an unknown thread name. Assert you got the session you meant:
 
 ```bash
 RESUMED=$(jq -r 'select(.type=="thread.started") | .thread_id' stage2.jsonl)
-[ "$RESUMED" = "$SESSION" ] || { echo "resume started a NEW session — context lost"; exit 1; }
+if [ "$RESUMED" != "$SESSION" ]; then
+  echo "WARNING: resumed thread id ($RESUMED) != requested ($SESSION)."
+  echo "Check stage2 output for stage-1 context before trusting it."
+fi
 ```
 
-This assumes a resumed run re-emits `thread.started` carrying the original id.
-That is the one load-bearing behavior here not independently confirmed, so treat
-a mismatch as "investigate", not automatically as "context lost".
+This assumes a resumed run re-emits `thread.started` carrying the original id —
+the one load-bearing behavior here not independently confirmed. It warns rather
+than exiting, so a correct run can't be aborted by a wrong assumption.
 
 ## Feeding data through stdin
 
@@ -253,8 +261,15 @@ done
 
 rc=0
 for p in "${pids[@]}"; do wait "$p" || rc=1; done
-[ "$rc" -ne 0 ] && echo "at least one run failed — check audit-*.log"
+if [ "$rc" -ne 0 ]; then echo "at least one run failed — check audit-*.log"; fi
+for f in audit-*.md; do
+  [ -s "$f" ] || echo "empty result: $f — see ${f%.md}.log"
+done
 ```
+
+Use `if`, not `[ ... ] && echo`: the AND-list returns 1 when everything
+succeeded, which aborts the script under `set -e`. The empty-file loop catches
+the other failure signature — a run that died leaves a zero-length answer.
 
 **Collect exit statuses; don't use a bare `wait`.** Bare `wait` returns `0` even
 when every job failed — verified — so a fan-out that died three times reports
@@ -337,10 +352,11 @@ set -euo pipefail
 
 # Self-contained: set these in the workflow, not from the preamble above.
 SKILL_DIR="/abs/path/to/skills/codex"
+CODEX_KEY="${OPENAI_API_KEY:?set this from your CI secret store}"
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
 MODEL=(-m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT")
 
-CODEX_API_KEY="$SECRET_KEY" codex exec "${MODEL[@]}" \
+CODEX_API_KEY="$CODEX_KEY" codex exec "${MODEL[@]}" \
   --json \
   --ephemeral \
   --sandbox workspace-write \

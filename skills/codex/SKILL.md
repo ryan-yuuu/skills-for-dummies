@@ -2,22 +2,18 @@
 name: codex
 description: >-
   Delegate work to the OpenAI Codex CLI (`codex exec`) from an agent session,
-  running it headless so it never opens the interactive TUI. Use this skill
-  whenever you want to hand a task, a question, or a half-formed idea to
-  Codex — have Codex review a diff, design, or plan; have Codex implement a
-  scoped change; get an independent critique or a second opinion from another
-  model; have Codex extract structured data; or fan several Codex runs out
-  across a codebase in parallel. Trigger it when the user says "ask
-  codex", "get codex's opinion", "have codex review this", "have codex
-  implement/check this", "run codex", "delegate this to codex", "what would
-  codex say", "see what another model thinks about this", or mentions `codex
-  exec`, `codex exec review`, `codex exec resume`, codex in CI, headless codex,
-  or scripting codex.
-  Also consult it before running any `codex` shell command yourself, because
-  invoking bare `codex` from an agent launches an interactive UI that hangs the
-  session with no way to recover. This is specifically the `codex` binary — not
-  the OpenAI API or SDK, not another agent's CLI, and not work you should
-  simply do yourself.
+  running it headless so it never opens the interactive TUI. Use it whenever you
+  hand a task or a question to Codex — have Codex review a diff, design, or
+  plan; implement a scoped change; give an independent critique or a second
+  opinion from another model; extract structured data; or fan several Codex runs
+  out across a codebase in parallel. Trigger on "ask codex", "get codex's
+  opinion", "have codex review this", "have codex implement/check this", "run
+  codex", "delegate this to codex", "what would codex say", or any mention of
+  `codex exec`, headless codex, codex in CI, or scripting codex. Also consult it
+  before running any `codex` command yourself: bare `codex`, `codex resume`, and
+  `codex fork` open interactive UIs that hang the session with no way out. This
+  is the `codex` binary — not the OpenAI API or SDK, not another agent's CLI,
+  and not work you should simply do yourself.
 ---
 
 # Delegating to Codex
@@ -48,15 +44,16 @@ long task you'd rather not spend your own context on.
 
 ## The invocation contract
 
-**Only `codex exec` and its subcommands are non-interactive.** Bare `codex`
-launches the terminal UI and waits forever for keystrokes that never come —
-your Bash call hangs and the session is stuck. So do `codex resume` and
-`codex fork`, which open a session *picker* by default, and `codex app`.
+**Four commands open a UI and hang you**: bare `codex`, `codex resume`,
+`codex fork` (both session *pickers*), and `codex app`. Your Bash call waits
+forever for keystrokes that never come.
 
-The trap worth internalizing: dropping `exec` from `codex exec resume` gives you
-`codex resume`, which hangs. Safe entry points are `codex exec` (alias
-`codex e`), `codex exec resume`, and `codex exec review` — plus the read-only
-helpers `codex debug models`, `codex doctor`, and `codex sandbox`.
+The trap worth internalizing: dropping `exec` from `codex exec resume` leaves
+`codex resume`, which hangs. Non-interactive commands include `codex exec` and
+its `resume`/`review` subcommands, plus top-level `codex review`, `codex
+doctor`, `codex debug models`, and `codex apply`. This skill uses the `exec`
+forms throughout, because only they accept `--json`, `-o`, `--output-schema`,
+and `--ephemeral`.
 
 Two preconditions worth checking once, since both fail confusingly rather than
 clearly. Codex must be installed and authenticated, and it refuses to run
@@ -81,8 +78,9 @@ SKILL_DIR="/abs/path/to/skills/codex"   # where this SKILL.md lives
 ```
 
 And when the repository you want Codex to work on isn't your current directory,
-point it there with `-C/--cd <DIR>`, which sets the agent's working root. That
-flag is also what confines a run to a worktree.
+point it there with `-C/--cd <DIR>`, which sets the agent's working root — and
+which directory's trust is checked. It confines *file writes* to a worktree, but
+not the trust entry, which lands on the main repo.
 
 The safe baseline, which you can copy and adjust — but write your acceptance
 criteria *before* you fire it (see [Set the bar](#set-the-bar-before-you-delegate)),
@@ -97,16 +95,17 @@ Each piece earns its place:
 
 | Fragment | Why |
 |---|---|
-| `exec` | The headless entry point. Without it you get the TUI. |
+| `exec` | The headless entry point. Drop it and you get the TUI (`codex`) or a session picker (`codex resume`). |
 | `$(codex_pick_model.py)` | Expands to `-m <strongest model> -c model_reasoning_effort=xhigh`. See below — the defaults are weaker than you'd expect. |
 | `--ephemeral` | Doesn't persist a session file. Skip it when you intend to `resume`. |
-| `-s read-only` | Explicit least privilege — **not redundant.** Codex records trust for any project it writes in, and thereafter defaults to `workspace-write` there. See below. |
+| `-s read-only` | Explicit least privilege — **not redundant.** Any run with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
 Output splits across two streams, which is what makes this scriptable:
 
 - **stdout** — the final agent message, and nothing else. Pipe or capture this.
-- **stderr** — the run header (model, sandbox, cwd, session id) and the live
+- **stderr** — the run header (model, sandbox, effort, approval, cwd, session
+  id) and the live
   progress transcript. Read it when debugging or when you need the session id.
 
 Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
@@ -184,7 +183,8 @@ codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
 
 ### Choosing an effort level
 
-Levels run `low → medium → high → xhigh → max → ultra`. **Default to `xhigh`** —
+Levels run `minimal → low → medium → high → xhigh → max → ultra` (no model in
+the observed catalog supports `minimal`). **Default to `xhigh`** —
 every model in the observed catalog supports it, and it's right for anything
 worth delegating. Reach past it deliberately: `max` for genuinely hard reasoning
 like subtle concurrency bugs, `ultra` (which lets the run delegate sub-tasks of
@@ -332,14 +332,16 @@ Don't use it to make an error message go away; if a task is failing under
 **Treat piped-in content as untrusted.** CI logs, PR bodies, commit messages,
 and issue text can carry instructions aimed at the model. Keep runs that consume
 them `read-only`, and never feed attacker-influenced text into a write-enabled
-run.
+run. Note that `read-only` is not the whole boundary: **web search is on by
+default**, so a prompt-injected run can still reach the network. Add
+`-c web_search='"disabled"'` when the input is untrusted.
 
 **If you are also editing the repo, do not give Codex `workspace-write` on it.**
 Two agents writing the same files concurrently corrupt each other's work in ways
 that are painful to untangle. Isolate it first:
 
 ```bash
-git worktree add /tmp/codex-wt -b codex/attempt
+git worktree add /tmp/codex-wt -b codex/fix-parser
 codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   -s workspace-write -C /tmp/codex-wt \
   -c sandbox_workspace_write.network_access=true \
@@ -402,10 +404,14 @@ drop to plain `codex exec` with the diff in the prompt:
 ```bash
 # Match --uncommitted (staged + unstaged + untracked). `git add -N` makes new
 # files visible to diff; plain `git diff` would silently skip them.
-git add -N . && git diff --binary HEAD \
-  | codex exec "${MODEL[@]}" -s read-only \
+git add -N .
+git diff --binary HEAD \
+  | codex exec "${MODEL[@]}" --ephemeral -s read-only \
     "Review this diff. Every finding must cite file and line, name a concrete
-     failure scenario, and carry a severity. No stylistic nitpicks."
+     failure scenario, and carry a severity. No stylistic nitpicks." \
+  > review.md 2> review.log
+git reset            # undo the add -N — otherwise `git stash` breaks and the
+                     # next `git commit -a` sweeps in untracked files
 ```
 
 For a base-branch review instead, pipe `git diff --binary main`. Note there's no
@@ -493,7 +499,7 @@ Grade against your written criteria, then check the claims underneath them:
   you named rather than a generic version of the problem. Plausible-sounding
   advice that ignores your stated constraint is the most common way this fails.
 - **For anything surprising** — read the stderr transcript, or run
-  `scripts/codex_digest.py` on a `--json` stream, to see which commands actually
+  `python3 "$SKILL_DIR/scripts/codex_digest.py"` on a `--json` stream, to see which commands actually
   ran. A run that never executed the test command did not verify anything,
   whatever the summary says.
 

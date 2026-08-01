@@ -55,9 +55,11 @@ def parse_stream(lines):
         "errors": [],
         "warnings": [],
         "malformed_lines": 0,
+        "unmodeled_lines": 0,
         "other_items": {},
         "in_flight": [],
-        "_completed_types": {},
+        "_done_types": {},
+        "_done_ids": {},
     }
 
     for line in lines:
@@ -75,7 +77,11 @@ def parse_stream(lines):
 
         etype = event.get("type")
 
-        if etype == "thread.started":
+        if etype == "turn.started":
+            # A new turn reopens the run: a stream cut during turn 2 must not
+            # inherit turn 1's completion.
+            d["completed"] = False
+        elif etype == "thread.started":
             tid = event.get("thread_id")
             d["thread_id"] = tid if isinstance(tid, str) else None
         elif etype == "turn.completed":
@@ -98,7 +104,7 @@ def parse_stream(lines):
             if isinstance(item, dict):
                 _collect_item(d, item)
             else:
-                d["malformed_lines"] += 1
+                d["unmodeled_lines"] += 1
         elif etype == "item.started":
             # Tracked only so a truncated run can show what was in flight when
             # it died -- otherwise an INCOMPLETE digest reports "Commands: 0".
@@ -106,34 +112,63 @@ def parse_stream(lines):
             itype = item.get("type") if isinstance(item, dict) else None
             if isinstance(itype, str):
                 label = item.get("command") or itype
-                d["in_flight"].append({"type": itype, "label": str(label)})
+                d["in_flight"].append(
+                    {"type": itype, "ident": _identity(item), "label": str(label)}
+                )
             else:
-                d["malformed_lines"] += 1
+                d["unmodeled_lines"] += 1
 
-    # Reconcile started against completed, one completion cancelling one start
-    # of the same type. Items the digest doesn't model (reasoning,
-    # mcp_tool_call, web_search) also start and complete, so every completed
-    # item counts here -- otherwise a clean run reports them as hung.
-    counts = dict(d.pop("_completed_types", {}))
-    remaining = []
+    # Reconcile started against completed in two passes. Pass 1 matches exact
+    # (type, id) so concurrent items of the same type are told apart -- codex
+    # runs tool calls in parallel, so "the second one finished first" is normal.
+    # Pass 2 sweeps up whatever is left using per-type counts, which covers
+    # id-less items, ids reused across turns, and starts whose completion
+    # reported a different id. Every completed item is counted, including types
+    # the digest doesn't model, or a clean run would report them as hung.
+    by_id = dict(d.pop("_done_ids", {}))
+    by_type = dict(d.pop("_done_types", {}))
+    survivors = []
     for started in d["in_flight"]:
-        if counts.get(started["type"], 0) > 0:
-            counts[started["type"]] -= 1
+        ident = started["ident"]
+        if ident is not None and by_id.get(ident, 0) > 0:
+            by_id[ident] -= 1
+            by_type[started["type"]] = by_type.get(started["type"], 1) - 1
+            continue
+        survivors.append(started)
+    remaining = []
+    for started in survivors:
+        if by_type.get(started["type"], 0) > 0:
+            by_type[started["type"]] -= 1
             continue
         remaining.append(started)
     d["in_flight"] = remaining
     return d
 
 
+def _identity(item):
+    """(type, id) when the item carries a usable scalar id, else None.
+
+    Ids are imperfect -- they restart per turn and repeat across types -- so
+    they are used as a *hint*, with a per-type count as the fallback. Neither
+    alone is sufficient: matching only by id mishandles id-less and reused ids,
+    and matching only by count cannot tell two concurrent commands apart.
+    """
+    itype = item.get("type")
+    if not isinstance(itype, str):
+        return None
+    iid = item.get("id")
+    if isinstance(iid, bool) or not isinstance(iid, (str, int)):
+        return None
+    return (itype, str(iid))
+
+
 def _collect_item(d, item):
     itype = item.get("type")
     if isinstance(itype, str):
-        # Started/completed items are reconciled by counting per type, not by
-        # id. Ids are unreliable for this: they restart per turn, repeat across
-        # types, and arrive as ints or strings interchangeably -- three separate
-        # bugs came from trying to match on them. A count can't crash, can't
-        # produce a phantom, and can't swallow a hung item.
-        d["_completed_types"][itype] = d["_completed_types"].get(itype, 0) + 1
+        d["_done_types"][itype] = d["_done_types"].get(itype, 0) + 1
+        ident = _identity(item)
+        if ident is not None:
+            d["_done_ids"][ident] = d["_done_ids"].get(ident, 0) + 1
 
     if itype == "agent_message":
         text = item.get("text")
@@ -174,7 +209,7 @@ def _collect_item(d, item):
         # beats silently dropping them.
         d["other_items"][itype] = d["other_items"].get(itype, 0) + 1
     else:
-        d["malformed_lines"] += 1
+        d["unmodeled_lines"] += 1
 
 
 def _as_exit_code(value):
@@ -255,8 +290,10 @@ def render(d, full_output=False):
         out.append(f"Other items: {summary}")
     if d["malformed_lines"]:
         out.append(f"WARNING: {d['malformed_lines']} unparseable line(s) — stream may be truncated.")
+    if d["unmodeled_lines"]:
+        out.append(f"Note: {d['unmodeled_lines']} event(s) in an unrecognized shape were skipped.")
 
-    if d["in_flight"]:
+    if d["in_flight"] and status_of(d) != "completed":
         out.append("")
         out.append("--- Started but never completed ---")
         for started in d["in_flight"]:

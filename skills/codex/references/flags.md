@@ -96,7 +96,7 @@ codex exec -s workspace-write -c sandbox_workspace_write.network_access=true "<t
 | `-m, --model <MODEL>` | Model to use. Invalid names fail at request time with HTTP 400, not at parse time. |
 | `-c, --config <key=value>` | Override a `config.toml` value. Dotted paths for nesting. Value parsed as TOML, falling back to a literal string. |
 | `-p, --profile <NAME>` | Layer `$CODEX_HOME/<name>.config.toml` over the base config. |
-| `--enable <FEATURE>` / `--disable <FEATURE>` | Repeatable. Equivalent to `-c features.<name>=true|false`. |
+| `--enable <FEATURE>` / `--disable <FEATURE>` | Repeatable. Equivalent to `-c features.<name>=true` or `=false`. |
 | `--strict-config` | Error on config keys this build doesn't recognize. Useful in CI to catch drift. |
 | `--oss` | Use an open-source provider. |
 | `--local-provider <lmstudio\|ollama>` | Which local provider to use with `--oss`. |
@@ -330,7 +330,7 @@ version mismatch:
 | Flag | On `codex` | On `codex exec` | Use instead |
 |---|---|---|---|
 | `-a, --ask-for-approval` | Yes | **Rejected** | Nothing can approve non-interactively. `-c approval_policy=never` is the documented non-interactive setting; the sandbox is the real control. |
-| `--search` | Yes | **Rejected** | `-c web_search='"live"'` — see below. |
+| `--search` | Yes | **Rejected** | Search is already on; `-c web_search='"disabled"'` is the toggle that changes anything — see below. |
 
 **Web search is ON by default under `exec`**, on `read-only` as well as
 full-access. Captured request bodies for a `tool_mode=null` model (`gpt-5.5`)
