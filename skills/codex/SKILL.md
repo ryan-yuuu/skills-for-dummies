@@ -11,7 +11,8 @@ description: >-
   codex", "delegate this to codex", "what would codex say", or any mention of
   `codex exec`, headless codex, codex in CI, or scripting codex. Also consult it
   before running any `codex` command yourself: bare `codex`, `codex resume`,
-  `codex fork`, and `codex app` all open UIs rather than running headless. This
+  `codex fork`, and `codex cloud` open interactive UIs rather than running
+  headless. This
   is the `codex` binary — not the OpenAI API or SDK, not another agent's CLI,
   and not work you should simply do yourself.
 ---
@@ -44,9 +45,11 @@ long task you'd rather not spend your own context on.
 
 ## The invocation contract
 
-**Four commands open a UI and hang you**: bare `codex`, `codex resume`,
-`codex fork` (both session *pickers*), and `codex app`. Your Bash call waits
-forever for keystrokes that never come.
+**Bare `codex`, `codex resume`, `codex fork`, and `codex cloud` open the
+terminal UI**, so your Bash call waits forever for keystrokes that never come.
+`--last` does not help: it skips the session *picker* but still opens the UI.
+(`codex app` launches the desktop GUI rather than a terminal UI — different
+failure, still not something to invoke from an agent.)
 
 The trap worth internalizing: dropping `exec` from `codex exec resume` leaves
 `codex resume`, which hangs. Non-interactive commands include `codex exec` and
@@ -176,7 +179,8 @@ expansion doesn't word-split, so `-m` swallows the whole string and the run dies
 with an opaque HTTP 400. The `model:` line in the stderr header is what exposes
 it. Assume zsh semantics; it's the macOS default.
 
-To resolve once and reuse, use `--export`, which quotes each value separately:
+To resolve once and reuse, use `--export`, which emits one assignment per value
+(shell-quoted where a value needs it):
 
 ```bash
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
@@ -295,10 +299,6 @@ non-`read-only` sandbox makes Codex record `trust_level = "trusted"` for the
 **git repo root** of its workdir, and a bare `codex exec` there afterwards
 resolves to `workspace-write`. The entry is written even when the run fails, and
 neither `--ephemeral` nor `--ignore-user-config` prevents it.
-
-`codex exec review` writes one too whenever its sandbox resolves
-non-`read-only`, which is why the review recipes pin
-`-c sandbox_mode='"read-only"'`.
 
 Two consequences worth holding onto. **Delegating one implementation task
 permanently escalates the default for the whole repository** — a run in

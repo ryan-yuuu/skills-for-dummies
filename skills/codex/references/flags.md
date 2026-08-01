@@ -57,7 +57,7 @@ piped *and* a prompt argument is present, the piped content is appended as a
 
 **Codex writes the trust entry itself.** Any run whose sandbox resolves to
 something other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
-`--full-auto`, `--yolo`, and `codex exec review` too) appends a trust entry to `$CODEX_HOME/config.toml`
+`--full-auto`, `--yolo`) appends a trust entry to `$CODEX_HOME/config.toml`
 keyed on the **git repo root** of the workdir — or the workdir itself outside a
 repo. Verified: a run with `-C <repo>/sub/deeper` wrote `[projects."<repo>"]`. Verified on a fresh `CODEX_HOME` and a
 fresh repo: one `-s workspace-write` run that failed at the API still wrote it,
@@ -70,8 +70,9 @@ that repository. Always pass `-s` explicitly.
 
 **Matching is broader than writing**, so trust can be granted by entries a run
 would never create. Writing produces a repo-root key (or the workdir outside a
-repo); matching accepts an entry on **either the workdir itself or its repo
-root**. Verified: a hand-written `[projects."<repo>/sub"]` grants
+repo); matching accepts an **exact** entry on either the workdir itself or its repo
+root — it is not a prefix walk, so `[projects."/Users/you"]` does not trust
+every repo beneath it (verified). Verified: a hand-written `[projects."<repo>/sub"]` grants
 `workspace-write` to a run in `<repo>/sub`, a key no write path produces. So
 auditing only repo-root entries under-predicts where write access already
 exists.
@@ -192,9 +193,9 @@ Runs a code review scoped to a review target. Targets are mutually exclusive:
 
 All four targets are mutually exclusive at parse time — any pair errors out.
 
-`review` writes a project trust entry like any other run whose sandbox resolves
-non-`read-only`, so pin `-c sandbox_mode='"read-only"'` unless it genuinely
-needs to write.
+`review` follows the ordinary sandbox rule — a `read-only` review writes no
+trust entry (verified). Pin `-c sandbox_mode='"read-only"'` anyway, since it has
+no `-s` and would otherwise inherit a trusted project's `workspace-write`.
 
 `--title <TITLE>` is only half-enforced: used alone it hard-errors demanding
 `--commit`, but combined with `--base` or `--uncommitted` it parses cleanly and
@@ -350,16 +351,31 @@ version mismatch:
 easy to reason about wrongly. Values: `disabled`, `cached` (the default),
 `indexed`, `live`. Captured request bodies:
 
-| Model class | Default request | `-c web_search='"live"'` | `-c web_search='"disabled"'` |
-|---|---|---|---|
-| `tool_mode=null` (`gpt-5.5` and older) | `web_search` tool present, `external_web_access: false` | `external_web_access: true` | tool absent |
-| `tool_mode=code_mode_only` (all `gpt-5.6-*`) | no `tools` array at all; no `web_search` anywhere | no observable change | no observable change |
+On `tool_mode=null` models (`gpt-5.5` and older) a `web_search` tool is sent and
+`external_web_access` is what varies:
 
-Two consequences. A search *tool* is offered by default on older models, but
-**external** web access is off — `cached` is not `live`. And on the `gpt-5.6-*`
-models, which include the strongest one this skill selects, the client sends no
-`web_search` tool at all, so `-c web_search='"disabled"'` is a **no-op there**;
-don't treat it as a containment control on those models.
+| Setting | `external_web_access` |
+|---|---|
+| default / `"cached"` under `read-only` or `workspace-write` | `false` |
+| default under `danger-full-access` (incl. `--yolo`, `--dangerously-bypass-…`) | **`true`** |
+| `"live"` | `true` |
+| `"indexed"` | `true` (plus `indexed_web_access: true`) |
+| `"disabled"` | tool absent entirely |
+
+`--full-auto` resolves to `workspace-write`, so it stays `false`. Enabling
+network with `sandbox_workspace_write.network_access=true` does **not** flip it —
+only the sandbox being `danger-full-access` does.
+
+On `tool_mode=code_mode_only` models (all `gpt-5.6-*`) no `tools` array is sent
+at all, no `web_search` appears anywhere in the request, and every setting above
+is a no-op.
+
+Two consequences. External web access is off by default only while the sandbox
+is `read-only` or `workspace-write`; choosing `danger-full-access` turns it on
+without you asking. And on the `gpt-5.6-*` models — which include the strongest
+one this skill selects — the client sends no `web_search` tool at all, so
+`-c web_search='"disabled"'` is a **no-op there**; don't treat it as a
+containment control on those models.
 
 This is client-side evidence from captured payloads and can't rule out
 server-side retrieval inside code mode. Treat it as "the flag does not do what
@@ -378,7 +394,10 @@ but never proves one doesn't:
 
 ## Exit codes and failure modes
 
-`0` on success, `1` on failure. Verified failures:
+`0` on success, `1` on runtime failure, `2` on argument-parse failure —
+a rejected flag, a missing required argument, or conflicting arguments.
+Config-load errors (malformed TOML, wrong type, `--strict-config` rejections)
+are `1`, not `2`. Verified failures:
 
 - **Invalid model** — warns about missing metadata, then `ERROR: {"type":"error","status":400,...}` on stderr, empty stdout, exit `1`.
 - **Outside a Git repository** — *"Not inside a trusted directory and `--skip-git-repo-check` was not specified."*

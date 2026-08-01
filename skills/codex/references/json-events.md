@@ -114,7 +114,8 @@ truncate before putting it in context.
  "changes":[{"path":"/abs/path/calc.py","kind":"update"}]}
 ```
 
-**`error`** — a diagnostic item. **Not on its own a run failure**: a run that
+**`error`** — a diagnostic item, and a single condition can emit more than one.
+**Not on its own a run failure**: a run that
 exits `0` with `turn.completed` and a correct answer can still carry one, such
 as a fallback-metadata warning. Decide status from `turn.failed`, a *top-level*
 `error` event, or the exit code:
