@@ -37,8 +37,7 @@ the setup cost here.
 
 ```bash
 # Record the fork point. `git worktree add` branches from HEAD, so diffing
-# against `main` later would fold your own unmerged commits into the patch —
-# and `git apply --check` does not catch that.
+# against `main` later would fold your own unmerged commits into the patch.
 BASE=$(git rev-parse HEAD)
 git worktree add /tmp/codex-wt -b codex/fix-parser "$BASE"
 codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
@@ -98,19 +97,34 @@ Useful when a task splits into stages and the second stage depends on what the
 first one learned. Resuming preserves the session's context, so the follow-up
 prompt doesn't need to restate it.
 
+**Read this before the recipe: a write-enabled resume cannot be isolated.**
+`resume` accepts neither `-s` nor `-C` (both rejected at parse time), so stage 2
+writes into whatever directory you invoke it from — you cannot point it at a
+worktree. If you're also editing that repo, keep stage 2 `read-only` and apply
+the change yourself. A `workspace-write` stage 2 also permanently trusts the
+repo root.
+
 ```bash
 # Stage 1 — note: no --ephemeral, or there is no session to resume
 codex exec "${MODEL[@]}" --json -s read-only \
   "Review src/ for race conditions. List each with file and line." \
-  < /dev/null > stage1.jsonl
+  < /dev/null > stage1.jsonl 2> stage1.log
+
+# A FAILED stage 1 still emits thread.started, so SESSION would populate and the
+# assertion below would compare a dead session against itself and pass. Check
+# the run actually completed before going on.
+python3 "$SKILL_DIR/scripts/codex_digest.py" stage1.jsonl > /dev/null \
+  || { echo "stage 1 failed — see stage1.log"; exit 1; }
 
 SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id' stage1.jsonl)
 
 # Stage 2 — inherits the conversation, but NOT the sandbox/model/effort.
 # --json so the resumed thread id can be asserted; -o to still capture the answer.
-codex exec resume "$SESSION" "${MODEL[@]}" -c sandbox_mode='"workspace-write"' \
+# read-only by default: switch to workspace-write only when you are NOT editing
+# this repo yourself, since stage 2 cannot be confined to a worktree.
+codex exec resume "$SESSION" "${MODEL[@]}" -c sandbox_mode='"read-only"' \
   --json -o stage2-answer.md \
-  "Fix the highest-severity race condition you identified. Leave the rest." \
+  "Name the single change that would fix the highest-severity race condition." \
   < /dev/null > stage2.jsonl 2> stage2.log
 ```
 
@@ -129,14 +143,6 @@ Three things that bite:
 you invoke it in. Note that `cd`-ing into the worktree does **not** give you
 `read-only`: a worktree resolves to its main repo's root, which stage 1 just
 marked trusted. Set the sandbox explicitly rather than relying on location.
-
-**A write-enabled resume cannot be isolated.** `resume` has neither `-s` nor
-`-C`, so stage 2 writes into whatever directory you invoke it from — you cannot
-point it at a worktree. If you are also editing that repo, don't give stage 2
-write access at all; do the analysis via resume and apply the change yourself.
-It also permanently trusts this repo's root, so later bare runs here default to
-`workspace-write`. Use `read-only` for stage 2
-whenever the follow-up doesn't actually need to write.
 
 Because nothing carries, set the sandbox explicitly on *every* resume:
 

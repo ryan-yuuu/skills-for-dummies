@@ -77,8 +77,12 @@ containing *this* `SKILL.md`. You'll run `codex` from the target repository,
 not from here, so script paths need it spelled out:
 
 ```bash
-SKILL_DIR="/abs/path/to/skills/codex"   # where this SKILL.md lives
+SKILL_DIR="/abs/path/to/skills/codex"   # the directory you read this SKILL.md from
 ```
+
+If you don't know it, it's the directory containing the `SKILL.md` you were just
+given — locate it with `find ~ -name SKILL.md -path '*/codex/*' 2>/dev/null` and
+verify `$SKILL_DIR/scripts/codex_pick_model.py` exists before relying on it.
 
 And when the repository you want Codex to work on isn't your current directory,
 point it there with `-C/--cd <DIR>`, which sets the agent's working root — and
@@ -407,15 +411,21 @@ drop to plain `codex exec` with the diff in the prompt:
 # `git add -N` in the real index would break `git stash` and make the next
 # `git commit -a` sweep in untracked files; `git reset` to undo it would
 # destroy any partial staging they had.
-TMPIDX=$(mktemp -u)
+TMPIDX=$(mktemp -u); DIFF=$(mktemp)
 GIT_INDEX_FILE="$TMPIDX" git read-tree HEAD
 GIT_INDEX_FILE="$TMPIDX" git add -A
-GIT_INDEX_FILE="$TMPIDX" git diff --cached HEAD \
-  | codex exec "${MODEL[@]}" --ephemeral -s read-only \
-    "Review this diff. Every finding must cite file and line, name a concrete
-     failure scenario, and carry a severity. No stylistic nitpicks." \
-  > review.md 2> review.log
+GIT_INDEX_FILE="$TMPIDX" git diff --cached HEAD > "$DIFF"
 rm -f "$TMPIDX"
+
+# An empty diff would get a confident "no issues found" that reads like a clean
+# bill of health for code Codex never saw.
+[ -s "$DIFF" ] || { echo "no uncommitted changes to review"; exit 0; }
+
+codex exec "${MODEL[@]}" --ephemeral -s read-only \
+  "Review this diff. Every finding must cite file and line, name a concrete
+   failure scenario, and carry a severity. No stylistic nitpicks." \
+  < "$DIFF" > "${TMPDIR:-/tmp}/review.md" 2> "${TMPDIR:-/tmp}/review.log"
+rm -f "$DIFF"
 ```
 
 That covers staged, unstaged, and untracked — the same scope as `--uncommitted`.
@@ -426,12 +436,13 @@ For a base-branch review, pipe `git diff main` instead. Note there's no
 (above), and always read the resulting diff yourself.
 
 ```bash
+git worktree add /tmp/codex-wt -b codex/fix-parser "$(git rev-parse HEAD)"
 codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
   -c sandbox_workspace_write.network_access=true \
   "Fix the failing test in tests/test_parser.py::test_nested_quotes. Run
    'pytest tests/test_parser.py' until green. Change only src/parser.py.
    Do not modify the test." \
-  < /dev/null
+  < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 ```
 
 **Extract** — when you need typed data rather than prose, constrain the final
