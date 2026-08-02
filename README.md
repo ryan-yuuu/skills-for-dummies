@@ -17,6 +17,19 @@ Write and structure docs following the Diátaxis framework, governing documentat
 npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill diataxis-docs-writer
 ```
 
+### [codex](skills/codex)
+
+Delegate work to the OpenAI Codex CLI headlessly — second opinions, code review,
+scoped implementation, design critique and brainstorming — with a safe invocation
+contract, deliberate sandboxing, dynamic selection of the strongest model, and an
+acceptance bar set before the call and verified after it.
+
+#### Install
+
+```bash
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill codex
+```
+
 ### [open-source-vendoring-best-practices](skills/open-source-vendoring-best-practices)
 
 Vendor external open-source code safely — license check first, attribution and
@@ -48,19 +61,6 @@ _Vendored from [google/adk-python](https://github.com/google/adk-python) (Apache
 
 ```bash
 npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-agent-builder
-```
-
-### [codex](skills/codex)
-
-Delegate work to the OpenAI Codex CLI headlessly — second opinions, code review,
-scoped implementation, design critique and brainstorming — with a safe invocation
-contract, deliberate sandboxing, dynamic selection of the strongest model, and an
-acceptance bar set before the call and verified after it.
-
-#### Install
-
-```bash
-npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill codex
 ```
 
 <br>
