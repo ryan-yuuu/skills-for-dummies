@@ -70,6 +70,11 @@ git worktree remove /tmp/codex-wt --force
 git branch -D codex/fix-parser
 ```
 
+The worktree holds the **committed** tree, so anything you have uncommitted is
+invisible to Codex — commit or stash first when the task concerns work in
+progress, or it will reason about stale content and the patch will conflict on
+adoption.
+
 `-C/--cd` sets the agent's working root, which is what confines it to the
 worktree. Without it, `-s workspace-write` applies to wherever you invoked the
 command.
@@ -141,9 +146,10 @@ Three things that bite:
   every resume, so re-pass them each time.
 
 `resume` also has no `-C/--cd`, and it resolves the sandbox from the directory
-you invoke it in. Note that `cd`-ing into the worktree does **not** give you
-`read-only`: a worktree resolves to its main repo's root, which stage 1 just
-marked trusted. Set the sandbox explicitly rather than relying on location.
+you invoke it in. `cd`-ing into a worktree doesn't buy you `read-only` either: a
+worktree resolves to its main repo's root, which may already be trusted — any
+earlier write-enabled run there would have marked it so. Set the sandbox
+explicitly rather than relying on location.
 
 Because nothing carries, set the sandbox explicitly on *every* resume:
 
@@ -206,9 +212,13 @@ Since stdout is just the final message, Codex composes with ordinary Unix tools:
 
 ```bash
 gh run view 123456 --log | codex exec "${MODEL[@]}" -s read-only \
-  "summarize this CI failure in 5 bullets" \
-  | gh pr comment 789 --body-file -
+  "summarize this CI failure in 5 bullets" > summary.md
+# read summary.md yourself, then post it
+gh pr comment 789 --body-file summary.md
 ```
+
+Deliberately two steps: piping straight into `gh pr comment` would publish model
+output, derived from attacker-influenceable CI logs, without anyone reading it.
 
 **Piped content is untrusted input.** CI logs, pull request bodies, commit
 messages, and issue text can all carry instructions aimed at the model. Keep
@@ -319,8 +329,10 @@ for f in audit-*.md; do
 done
 ```
 
-Use `if`, not `[ ... ] && echo`: the AND-list returns 1 when everything
-succeeded, which aborts the script under `set -e`. The empty-file loop catches
+Use `if`, not `[ ... ] && echo`: when everything succeeds the test is false, so
+the AND-list evaluates to 1. `set -e` won't abort on it mid-script, but as the
+final statement it silently becomes the script's exit status — a green run
+reported as a failure. The empty-file loop catches
 the other failure signature — a run that died leaves a zero-length answer.
 
 **Collect exit statuses; don't use a bare `wait`.** Bare `wait` returns `0` even

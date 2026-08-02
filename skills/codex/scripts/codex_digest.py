@@ -61,6 +61,7 @@ def parse_stream(lines):
         "unmodeled_lines": 0,
         "other_items": {},
         "in_flight": [],
+        "_turn": 0,
         "_done_types": {},
         "_done_ids": {},
     }
@@ -85,6 +86,7 @@ def parse_stream(lines):
             # inherit turn 1's completion, nor its failure. Errors move aside
             # too -- leaving them would print an "Errors:" block above a
             # "completed" status, which reads as a contradiction.
+            d["_turn"] += 1
             d["completed"] = False
             d["failed"] = False
             d["superseded_errors"].extend(d["errors"])
@@ -121,7 +123,7 @@ def parse_stream(lines):
             if isinstance(itype, str):
                 label = item.get("command") or itype
                 d["in_flight"].append(
-                    {"type": itype, "ident": _identity(item), "label": str(label)}
+                    {"type": itype, "ident": _identity(item, d["_turn"]), "label": str(label)}
                 )
             else:
                 d["unmodeled_lines"] += 1
@@ -138,6 +140,7 @@ def parse_stream(lines):
     # id-less items, ids reused across turns, and starts whose completion
     # reported a different id. Every completed item is counted, including types
     # the digest doesn't model, or a clean run would report them as hung.
+    d.pop("_turn", None)
     by_id = dict(d.pop("_done_ids", {}))
     by_type = dict(d.pop("_done_types", {}))
     survivors = []
@@ -158,8 +161,12 @@ def parse_stream(lines):
     return d
 
 
-def _identity(item):
-    """(type, id) when the item carries a usable scalar id, else None.
+def _identity(item, turn):
+    """(turn, type, id) when the item carries a usable scalar id, else None.
+
+    Scoped to the turn because ids restart per turn: without it, a command left
+    hanging in turn 1 matches turn 2's completion of the same id, and the digest
+    names a command the stream visibly shows finishing.
 
     Ids are imperfect -- they restart per turn and repeat across types -- so
     they are used as a *hint*, with a per-type count as the fallback. Neither
@@ -172,14 +179,14 @@ def _identity(item):
     iid = item.get("id")
     if isinstance(iid, bool) or not isinstance(iid, (str, int)):
         return None
-    return (itype, str(iid))
+    return (turn, itype, str(iid))
 
 
 def _collect_item(d, item):
     itype = item.get("type")
     if isinstance(itype, str):
         d["_done_types"][itype] = d["_done_types"].get(itype, 0) + 1
-        ident = _identity(item)
+        ident = _identity(item, d["_turn"])
         if ident is not None:
             d["_done_ids"][ident] = d["_done_ids"].get(ident, 0) + 1
 
@@ -193,7 +200,7 @@ def _collect_item(d, item):
         d["commands"].append(
             {
                 "id": item.get("id"),
-                "command": str(item.get("command", "")),
+                "command": item.get("command") if isinstance(item.get("command"), str) else "?",
                 "exit_code": _as_exit_code(item.get("exit_code")),
                 "output": item.get("aggregated_output") if isinstance(item.get("aggregated_output"), str) else "",
             }
@@ -206,8 +213,8 @@ def _collect_item(d, item):
                     d["file_changes"].append(
                         {
                             "id": item.get("id"),
-                            "path": str(change.get("path", "")),
-                            "kind": str(change.get("kind", "?")),
+                            "path": change.get("path") if isinstance(change.get("path"), str) else "?",
+                            "kind": change.get("kind") if isinstance(change.get("kind"), str) else "?",
                         }
                     )
     elif itype == "error":
@@ -415,7 +422,7 @@ def main():
     ap.add_argument("--json", dest="as_json", action="store_true", help="emit digest as JSON")
     args = ap.parse_args()
 
-    if args.file:
+    if args.file is not None:
         try:
             # errors="replace": a run killed mid-write can split a multi-byte
             # character, and crashing on that defeats the whole point of

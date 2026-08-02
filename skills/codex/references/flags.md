@@ -64,8 +64,9 @@ wrote `[projects."<repo>"]`.
 It happens even on failure: verified on a fresh `CODEX_HOME` and a fresh repo,
 one `-s workspace-write` run that failed at the API still wrote the entry, and
 the next bare `codex exec` resolved to `workspace-write`. **Neither
-`--ephemeral` nor `--ignore-user-config` prevents it** — they change what a run
-reads, not what it records.
+`--ephemeral` nor `--ignore-user-config` prevents it** — `--ephemeral` skips the
+session file and `--ignore-user-config` skips reading config; neither touches
+the trust entry.
 
 **Genuinely resuming a session does not write one.** Verified: `codex exec
 resume <id> -c sandbox_mode='"workspace-write"'` left the config untouched,
@@ -290,7 +291,10 @@ the user's `config.toml` — so `reasoning effort: xhigh` does not prove your fl
 landed if their config already said `xhigh`; vary the value if you need
 certainty. `none` means nothing set it and the model's catalog default applies.
 **`--json` suppresses the header**, and no event reports model or effort, so
-JSON runs offer no way to confirm after the fact.
+JSON runs offer no way to confirm after the fact — verify once with a throwaway
+plain run, or read what `codex_pick_model.py` resolved via
+`--slug-only`/`--effort-only` (its default output is consumed by the `$(...)`
+splice and never displayed).
 
 ## Config overrides with `-c`
 

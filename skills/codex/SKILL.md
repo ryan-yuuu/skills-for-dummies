@@ -118,8 +118,8 @@ Output splits across two streams, which is what makes this scriptable:
 
 - **stdout** — the final agent message, and nothing else. Pipe or capture this.
 - **stderr** — the run header (`workdir`, `model`, `provider`, `approval`,
-  `sandbox`, `reasoning effort`, `session id`) and the live progress transcript.
-  Read it when debugging or when you need the session id.
+  `sandbox`, `reasoning effort`, `reasoning summaries`, `session id`) and the
+  live progress transcript. Read it when debugging or for the session id.
 
 Exit code is `0` on success, `1` on runtime failure, and `2` when a flag is
 rejected at parse time — so `if ! codex exec ...` works, and a `2` means you
@@ -314,7 +314,8 @@ invoking Codex where you can, otherwise pass
 **`codex exec review` and `codex exec resume` reject `-s` entirely**, and
 neither is safe by default — `resume` re-resolves the sandbox from the current
 directory rather than inheriting the session's, and drops the model and effort
-too. Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
+too. `resume` also rejects `-C`, so a write-enabled resume **cannot** be
+confined to a worktree: keep stage 2 `read-only` and apply the change yourself. Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
 `-c model_reasoning_effort=` on every resume. Details:
 [review](references/flags.md#codex-exec-review),
 [resume](references/flags.md#codex-exec-resume).

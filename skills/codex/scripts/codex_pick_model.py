@@ -160,16 +160,17 @@ def _priority_key(model):
     rank = _rank(model)
     # Unrankable entries sort last, then alphabetically, so ordering stays
     # deterministic rather than depending on catalog order.
-    return (10**6 if rank is None else rank, model.get("slug", ""))
+    return (float("inf") if rank is None else rank, model.get("slug", ""))
 
 
 def best_model(models):
     """Lowest `priority` wins -- the catalog ranks strongest first (priority 1
     is described as the latest frontier agentic coding model)."""
     pool = selectable(models)
-    # Say so when a priority can't be ranked. Silently demoting it can select a
-    # weaker model than the catalog intends -- e.g. a float 1.0 losing to an
-    # int 2 -- which is the exact failure this script exists to prevent.
+    # Say so when a priority can't be ranked at all (a string, a bool, a
+    # non-integral float). Such entries sort last, which can select a weaker
+    # model than the catalog intends -- the failure this script exists to
+    # prevent. Integral floats are handled by _rank and never reach here.
     unrankable = [m["slug"] for m in pool
                   if m.get("priority") is not None and _rank(m) is None]
     if unrankable:
@@ -257,10 +258,10 @@ def render_list(models):
     for m in rows:
         # A key present with a JSON null survives .get(k, default), so coerce
         # rather than relying on the default -- the live catalog does ship nulls.
-        # Only int priorities are rankable, so only int priorities display as a
-        # number -- otherwise the table prints an order it didn't sort by.
-        prio = m.get("priority")
-        prio = str(prio) if isinstance(prio, int) and not isinstance(prio, bool) else "?"
+        # Display via _rank so the column always agrees with the sort. A second
+        # copy of this test is what let the table print "?" in the first row.
+        rank = _rank(m)
+        prio = "?" if rank is None else str(rank)
         level = m.get("default_reasoning_level")
         level = level if isinstance(level, str) else "?"
         out.append(f"{prio:<5} {m['slug']:<{width}}  {level:<8} {','.join(supported_efforts(m))}")
