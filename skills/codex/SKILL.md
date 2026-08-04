@@ -335,9 +335,10 @@ cleanup: [`references/patterns.md`](references/patterns.md#worktree-isolation).
 ## Four shapes of delegation
 
 These all resolve the model once up front (see the shell-splitting note above
-for why the values are kept in separate quoted variables). Before firing any of
-them, settle how you'll wait and redirect both streams to files —
-[Long runs](#long-runs-and-running-several-at-once):
+for why the values are kept in separate quoted variables). **A real run takes
+minutes**, so background the call or raise the timeout before you fire any of
+them — see [Long runs](#long-runs-and-running-several-at-once) — and redirect
+both streams to files:
 
 ```bash
 eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"

@@ -178,9 +178,9 @@ def _identity(item, turn):
 
     Ids are imperfect -- they restart per turn and repeat across types -- so
     they are used as a *hint*, with a per-(turn, type) count as the fallback.
-    That count is turn-scoped for the same reason this key is. Neither
-    alone is sufficient: matching only by id mishandles id-less and reused ids,
-    and matching only by count cannot tell two concurrent commands apart.
+    Neither alone is sufficient: matching only by id mishandles id-less and
+    reused ids, and matching only by count cannot tell two concurrent commands
+    apart. That count is turn-scoped for the same reason this key is.
     """
     itype = item.get("type")
     if not isinstance(itype, str):
