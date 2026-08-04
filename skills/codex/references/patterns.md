@@ -89,7 +89,7 @@ resolved to `workspace-write`.
 So the worktree protects your *working files* from concurrent edits — which is
 what it's for — but the escalation lands on the real repository and outlives
 `git worktree remove`. Pass `-s` explicitly on every later run there, or delete
-the entry from `$CODEX_HOME/config.toml`.
+the entry from `$CODEX_HOME/config.toml` (`~/.codex` by default).
 
 `sandbox_workspace_write.network_access=true` is there because
 `workspace-write` blocks the network by default
@@ -470,6 +470,7 @@ GIT_INDEX_FILE="$TMPIDX" git add -A
 GIT_INDEX_FILE="$TMPIDX" git diff --cached --binary HEAD > codex.patch
 rm -f "$TMPIDX"
 # `if`, not `[ ... ] && echo`: an empty patch is the normal "nothing to change"
-# outcome, and the AND-list would return 1 and abort the job under `set -e`.
+# outcome, and a false AND-list as the step's LAST command becomes exit 1 and
+# fails the step. `set -e` does not fire on it -- same trap as Parallel fan-out.
 if [ -s codex.patch ]; then echo "has_patch=true" >> "$GITHUB_OUTPUT"; fi
 ```
