@@ -103,7 +103,7 @@ codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   --ephemeral -s read-only "<self-contained prompt>" < /dev/null
 ```
 
-Each piece earns its place:
+Why each fragment:
 
 | Fragment | Why |
 |---|---|
@@ -113,7 +113,7 @@ Each piece earns its place:
 | `-s read-only` | Explicit least privilege — **not redundant.** Starting a session with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
-Output splits across two streams, which is what makes this scriptable:
+Output splits across two streams:
 
 - **stdout** — the final agent message, and nothing else. Pipe or capture this.
 - **stderr** — the run header (`workdir`, `model`, `provider`, `approval`,
@@ -197,9 +197,7 @@ latency beats depth. Per-model support and the divergence from the published
 docs are in
 [`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
-Higher effort costs more tokens and wall-clock time. That trade is usually worth
-taking, because the expensive failure is not a slow run — it's a fast, confident,
-wrong answer you then have to verify and discard.
+Higher effort costs more tokens and wall-clock time. Take the trade.
 
 Confirm what actually took effect. In plain (non-`--json`) mode, the stderr
 header echoes the resolved settings, so an override that *parsed* shows up
@@ -225,12 +223,8 @@ correct result actually looks like, and write it down. This is the acceptance
 criteria you will grade the returned work against, and fixing it in advance is
 what makes the grading honest.
 
-The order matters. A bar set *after* seeing the output isn't a bar; it's a
-rationalization — Codex returns something articulate and 80% right, and because
-it reads well you accept the missing 20%.
-
-A usable bar is specific and checkable. Vague targets can't fail, which is
-exactly what makes them useless:
+Write it before you see the output; a bar set afterwards gets bent to fit what
+came back. Make it specific and checkable — a vague target can't fail:
 
 | Too vague | A real bar |
 |---|---|
@@ -246,7 +240,7 @@ yourself, or tell the user plainly what fell short — don't quietly lower the b
 to fit what came back. Catching yourself arguing that a criterion "wasn't really
 necessary" is the signal.
 
-## Write a prompt for someone with amnesia
+## Write a self-contained prompt
 
 This is the single biggest quality lever, and the easiest thing to get wrong.
 You have a whole conversation of context; Codex has an empty room and a
@@ -288,8 +282,7 @@ record the workdir's **git repo root** as trusted, so bare runs there afterwards
 resolve to `workspace-write`. Two consequences: delegating one implementation
 task permanently escalates the default for the *whole* repository, and a git
 worktree does **not** contain it — a write-enabled run in a worktree trusts the
-main repo. Passing `-s` on every call is the whole defense. Mechanism, matching
-rules, and verification in
+main repo. Pass `-s` on every call. Mechanism and verification:
 [`references/flags.md`](references/flags.md#sandbox-and-permissions).
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
@@ -350,8 +343,8 @@ zsh. If arrays feel like overkill for a one-off, just inline
 `$(python3 "$SKILL_DIR/scripts/codex_pick_model.py")` instead.
 
 **Ask** — a question, a design critique, a brainstorm. Read-only, answer on
-stdout. This is where model diversity pays: a different model family reaches
-different conclusions, which is the whole point of a second opinion.
+stdout. A different model family reaches different conclusions — that is the
+point of a second opinion.
 
 ```bash
 codex exec "${MODEL[@]}" --ephemeral -s read-only \
@@ -393,11 +386,9 @@ codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 ```
 
-Creating the worktree, recording the fork point to diff against, adopting the
-patch, and cleanup are all in
-[`references/patterns.md`](references/patterns.md#worktree-isolation) — use it
-rather than improvising, since diffing against the wrong base silently folds
-your own commits into the patch.
+Worktree setup, fork point, patch adoption, and cleanup:
+[`references/patterns.md`](references/patterns.md#worktree-isolation). Diffing
+against the wrong base folds your own commits into the patch.
 
 **Extract** — when you need typed data rather than prose, constrain the final
 message with a JSON Schema. Far more reliable than asking for JSON in the prompt:
@@ -407,14 +398,14 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only --output-schema schema.json \
   -o result.json "Extract project metadata." < /dev/null
 ```
 
-`--output-schema` takes a file path, not inline JSON. Worked schema, and how to
-constrain a `review` this way, in `references/patterns.md#structured-output`.
+`--output-schema` takes a file path, not inline JSON. Worked schema and
+constraining a `review`: `references/patterns.md#structured-output`.
 
 ## Long runs, and running several at once
 
 A real Codex task runs for minutes, often past a default command timeout — and a
 timeout kills the run with nothing to show for the tokens already spent. Two
-mechanisms cover this, and they compose:
+mechanisms cover this:
 
 | Mechanism | How | Use when |
 |---|---|---|
@@ -449,7 +440,7 @@ Four constraints apply either way:
 `codex_digest.py` reads a partial JSONL stream mid-flight and reports
 `INCOMPLETE`, which is how you tell "still working" from "finished".
 
-## Trust the work, verify the output
+## Verify the output
 
 Trust Codex to do the work — that's the point of delegating, and second-guessing
 every step wastes what you paid for. But the *output* always gets reviewed
