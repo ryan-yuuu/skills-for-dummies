@@ -55,6 +55,10 @@ piped *and* a prompt argument is present, the piped content is appended as a
 | Project with `trust_level = "trusted"` in `$CODEX_HOME/config.toml` | `workspace-write [workdir, /tmp, $TMPDIR]` |
 | Any directory, with `--ignore-user-config` | `read-only` |
 
+`$CODEX_HOME` is codex's own config directory — `~/.codex` unless the
+environment variable overrides it, which is also how you give a run an isolated
+config and trust store.
+
 **Codex writes the trust entry itself**, when a run *creates a session* with a
 sandbox other than `read-only` (`-s`, `-c sandbox_mode`, a config value,
 `--full-auto`, `--yolo`). The key is the **git repo root** of the workdir — or

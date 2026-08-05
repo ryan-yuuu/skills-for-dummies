@@ -12,9 +12,8 @@ description: >-
   `codex exec`, headless codex, codex in CI, or scripting codex. Also consult it
   before running any `codex` command yourself: bare `codex`, `codex resume`,
   `codex fork`, and `codex cloud` open interactive UIs rather than running
-  headless. This
-  is the `codex` binary — not the OpenAI API or SDK, not another agent's CLI,
-  and not work you should simply do yourself.
+  headless. This is the `codex` binary — not the OpenAI API or SDK, not another
+  agent's CLI, and not work you should simply do yourself.
 ---
 
 # Delegating to Codex
@@ -56,9 +55,9 @@ The trap worth internalizing: dropping `exec` from `codex exec resume` leaves
 its `resume`/`review` subcommands, plus top-level `codex review`, `codex
 doctor`, `codex debug models`, `codex apply`, and the `codex cloud`
 *subcommands* such as `codex cloud exec` — it's only bare `codex cloud` that
-opens the TUI. This skill uses the `exec` forms
-throughout, because they're the ones that accept the full scripting surface —
-`--json`, `-o`, `--output-schema`, `--ephemeral` — together.
+opens the TUI. This skill uses the `exec` forms throughout, because they're the
+ones that accept the full scripting surface — `--json`, `-o`,
+`--output-schema`, `--ephemeral` — together.
 
 Two preconditions worth checking once, since both fail confusingly rather than
 clearly. Codex must be installed and authenticated, and it refuses to run
@@ -104,7 +103,7 @@ codex exec $(python3 "$SKILL_DIR/scripts/codex_pick_model.py") \
   --ephemeral -s read-only "<self-contained prompt>" < /dev/null
 ```
 
-Each piece earns its place:
+Why each fragment:
 
 | Fragment | Why |
 |---|---|
@@ -114,7 +113,7 @@ Each piece earns its place:
 | `-s read-only` | Explicit least privilege — **not redundant.** Starting a session with a non-`read-only` sandbox makes Codex trust that repo *root* — even if the run fails — and bare runs there default to `workspace-write` afterwards. See below. |
 | `< /dev/null` | Codex reads stdin as *additional context* even when a prompt argument is given. Closing stdin prevents an inherited pipe from blocking the run. |
 
-Output splits across two streams, which is what makes this scriptable:
+Output splits across two streams:
 
 - **stdout** — the final agent message, and nothing else. Pipe or capture this.
 - **stderr** — the run header (`workdir`, `model`, `provider`, `approval`,
@@ -132,10 +131,9 @@ the resumed thread id rather than trusting the exit code; the two-stage recipe
 in [`references/patterns.md`](references/patterns.md#multi-turn-with-resume)
 does.
 
-One more way to hang: `-i/--image` is **variadic**, so
-`codex exec -i pic.png "do the thing"` consumes the prompt as a second image
-path and then blocks reading stdin. Put `-i` after the prompt, or separate with
-`--`.
+One more way to hang: `-i/--image` is **variadic** — it swallows the prompt as a
+second image path and then blocks reading stdin. Put `-i` after the prompt, or
+separate with `--`.
 
 ## Always set the model and the effort
 
@@ -183,29 +181,23 @@ expansion doesn't word-split, so `-m` swallows the whole string and the run dies
 with an opaque HTTP 400. The `model:` line in the stderr header is what exposes
 it. Assume zsh semantics; it's the macOS default.
 
-To resolve once and reuse, use `--export`, which emits one assignment per value
-(shell-quoted where a value needs it):
-
-```bash
-eval "$(python3 "$SKILL_DIR/scripts/codex_pick_model.py" --export)"
-codex exec -m "$CODEX_MODEL" -c model_reasoning_effort="$CODEX_EFFORT" \
-  -s read-only "<task>" < /dev/null
-```
+To resolve once and reuse instead, `--export` emits one shell assignment per
+value, quoted where a value needs it — used in
+[Four shapes](#four-shapes-of-delegation) below.
 
 ### Choosing an effort level
 
 Levels run `minimal → low → medium → high → xhigh → max → ultra` (no model in
-the observed catalog supports `minimal`). **Default to `xhigh`** — every model in the observed catalog supports it, and
-it's right for anything worth delegating. Reach past it deliberately: `max` for
-genuinely hard reasoning like subtle concurrency bugs, `ultra` (which lets the
-run delegate sub-tasks of its own) for large open-ended work. Drop to `medium`
-only for mechanical calls where latency beats depth. Per-model support and the
-divergence from the published docs are in
+the observed catalog supports `minimal`). **Default to `xhigh`** — every model
+in the observed catalog supports it, and it's right for anything worth
+delegating. Reach past it deliberately: `max` for genuinely hard reasoning like
+subtle concurrency bugs, `ultra` (which lets the run delegate sub-tasks of its
+own) for large open-ended work. Drop to `medium` only for mechanical calls where
+latency beats depth. Per-model support and the divergence from the published
+docs are in
 [`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
-Higher effort costs more tokens and wall-clock time. That trade is usually worth
-taking, because the expensive failure is not a slow run — it's a fast, confident,
-wrong answer you then have to verify and discard.
+Higher effort costs more tokens and wall-clock time. Take the trade.
 
 Confirm what actually took effect. In plain (non-`--json`) mode, the stderr
 header echoes the resolved settings, so an override that *parsed* shows up
@@ -217,14 +209,11 @@ sandbox: read-only
 reasoning effort: xhigh
 ```
 
-The header shows the **resolved** value — flag, then `-c`, then the user's
-config — so reading back `xhigh` doesn't prove *your* flag landed if their
-config already said it. `--json` suppresses the header entirely and no event
-carries model or effort, so a JSON run offers nothing to check against — verify
-the flags once with a throwaway plain run, or trust `codex_pick_model.py`,
-which prints exactly what it resolved. And the header only proves an override
-was *parsed*: a mistyped `-c` key is accepted silently unless you pass
-`--strict-config`. Full resolution rules in
+Three limits stop it short of proof: it reports the **resolved** value, so it
+can't separate your flag from the user's config; `--json` suppresses it
+entirely; and a mistyped `-c` key is accepted silently unless you pass
+`--strict-config`. So verify with a throwaway plain run, or trust what
+`codex_pick_model.py` prints. Resolution order and the per-case remedies:
 [`references/flags.md`](references/flags.md#model-selection-and-reasoning-effort).
 
 ## Set the bar before you delegate
@@ -234,12 +223,8 @@ correct result actually looks like, and write it down. This is the acceptance
 criteria you will grade the returned work against, and fixing it in advance is
 what makes the grading honest.
 
-The order matters. A bar set *after* seeing the output isn't a bar; it's a
-rationalization — Codex returns something articulate and 80% right, and because
-it reads well you accept the missing 20%.
-
-A usable bar is specific and checkable. Vague targets can't fail, which is
-exactly what makes them useless:
+Write it before you see the output; a bar set afterwards gets bent to fit what
+came back. Make it specific and checkable — a vague target can't fail:
 
 | Too vague | A real bar |
 |---|---|
@@ -255,7 +240,7 @@ yourself, or tell the user plainly what fell short — don't quietly lower the b
 to fit what came back. Catching yourself arguing that a criterion "wasn't really
 necessary" is the signal.
 
-## Write a prompt for someone with amnesia
+## Write a self-contained prompt
 
 This is the single biggest quality lever, and the easiest thing to get wrong.
 You have a whole conversation of context; Codex has an empty room and a
@@ -297,8 +282,7 @@ record the workdir's **git repo root** as trusted, so bare runs there afterwards
 resolve to `workspace-write`. Two consequences: delegating one implementation
 task permanently escalates the default for the *whole* repository, and a git
 worktree does **not** contain it — a write-enabled run in a worktree trusts the
-main repo. Passing `-s` on every call is the whole defense. Mechanism, matching
-rules, and verification in
+main repo. Pass `-s` on every call. Mechanism and verification:
 [`references/flags.md`](references/flags.md#sandbox-and-permissions).
 
 `--add-dir <DIR>` grants write access to extra directories and is the right
@@ -315,7 +299,8 @@ invoking Codex where you can, otherwise pass
 neither is safe by default — `resume` re-resolves the sandbox from the current
 directory rather than inheriting the session's, and drops the model and effort
 too. `resume` also rejects `-C`, so a write-enabled resume **cannot** be
-confined to a worktree: keep stage 2 `read-only` and apply the change yourself. Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
+confined to a worktree: keep stage 2 `read-only` and apply the change yourself.
+Constrain them with `-c sandbox_mode='"read-only"'` and re-pass `-m` and
 `-c model_reasoning_effort=` on every resume. Details:
 [review](references/flags.md#codex-exec-review),
 [resume](references/flags.md#codex-exec-resume).
@@ -358,8 +343,8 @@ zsh. If arrays feel like overkill for a one-off, just inline
 `$(python3 "$SKILL_DIR/scripts/codex_pick_model.py")` instead.
 
 **Ask** — a question, a design critique, a brainstorm. Read-only, answer on
-stdout. This is where model diversity pays: a different model family reaches
-different conclusions, which is the whole point of a second opinion.
+stdout. A different model family reaches different conclusions — that is the
+point of a second opinion.
 
 ```bash
 codex exec "${MODEL[@]}" --ephemeral -s read-only \
@@ -401,11 +386,9 @@ codex exec "${MODEL[@]}" -s workspace-write -C /tmp/codex-wt \
   < /dev/null > /tmp/codex-answer.md 2> /tmp/codex-progress.log
 ```
 
-Creating the worktree, recording the fork point to diff against, adopting the
-patch, and cleanup are all in
-[`references/patterns.md`](references/patterns.md#worktree-isolation) — use it
-rather than improvising, since diffing against the wrong base silently folds
-your own commits into the patch.
+Worktree setup, fork point, patch adoption, and cleanup:
+[`references/patterns.md`](references/patterns.md#worktree-isolation). Diffing
+against the wrong base folds your own commits into the patch.
 
 **Extract** — when you need typed data rather than prose, constrain the final
 message with a JSON Schema. Far more reliable than asking for JSON in the prompt:
@@ -415,14 +398,14 @@ codex exec "${MODEL[@]}" --ephemeral -s read-only --output-schema schema.json \
   -o result.json "Extract project metadata." < /dev/null
 ```
 
-`--output-schema` takes a file path, not inline JSON. Worked schema, and how to
-constrain a `review` this way, in `references/patterns.md#structured-output`.
+`--output-schema` takes a file path, not inline JSON. Worked schema and
+constraining a `review`: `references/patterns.md#structured-output`.
 
 ## Long runs, and running several at once
 
 A real Codex task runs for minutes, often past a default command timeout — and a
 timeout kills the run with nothing to show for the tokens already spent. Two
-mechanisms cover this, and they compose:
+mechanisms cover this:
 
 | Mechanism | How | Use when |
 |---|---|---|
@@ -457,7 +440,7 @@ Four constraints apply either way:
 `codex_digest.py` reads a partial JSONL stream mid-flight and reports
 `INCOMPLETE`, which is how you tell "still working" from "finished".
 
-## Trust the work, verify the output
+## Verify the output
 
 Trust Codex to do the work — that's the point of delegating, and second-guessing
 every step wastes what you paid for. But the *output* always gets reviewed
@@ -488,7 +471,6 @@ misses, say which criterion it missed — don't launder a partial result into
 Relay Codex's conclusions as *Codex's conclusions*, especially when you disagree.
 When your review and its review conflict, that disagreement is the useful signal
 — surface both rather than silently picking one.
-
 
 ## Reference material
 

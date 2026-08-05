@@ -123,7 +123,8 @@ def parse_stream(lines):
             if isinstance(itype, str):
                 label = item.get("command") or itype
                 d["in_flight"].append(
-                    {"type": itype, "ident": _identity(item, d["_turn"]), "label": str(label)}
+                    {"type": itype, "turn": d["_turn"],
+                     "ident": _identity(item, d["_turn"]), "label": str(label)}
                 )
             else:
                 d["unmodeled_lines"] += 1
@@ -134,27 +135,34 @@ def parse_stream(lines):
             d["unmodeled_lines"] += 1
 
     # Reconcile started against completed in two passes. Pass 1 matches exact
-    # (type, id) so concurrent items of the same type are told apart -- codex
-    # runs tool calls in parallel, so "the second one finished first" is normal.
-    # Pass 2 sweeps up whatever is left using per-type counts, which covers
-    # id-less items, ids reused across turns, and starts whose completion
-    # reported a different id. Every completed item is counted, including types
-    # the digest doesn't model, or a clean run would report them as hung.
+    # (turn, type, id) so concurrent items of the same type are told apart --
+    # codex runs tool calls in parallel, so "the second one finished first" is
+    # normal. Pass 2 sweeps up whatever is left by counting per (turn, type),
+    # which covers id-less items and starts whose completion reported a
+    # different id. Every completed item is counted, including types the digest
+    # doesn't model, or a clean run would report them as hung.
+    #
+    # BOTH passes are turn-scoped, and that is load-bearing: ids restart per
+    # turn, so a global count lets a later turn's completion cancel an earlier
+    # turn's hang -- the digest would then stay silent about a command the
+    # stream never shows finishing. Scoping only pass 1 left that hole open.
     d.pop("_turn", None)
     by_id = dict(d.pop("_done_ids", {}))
     by_type = dict(d.pop("_done_types", {}))
     survivors = []
     for started in d["in_flight"]:
         ident = started["ident"]
+        tkey = (started["turn"], started["type"])
         if ident is not None and by_id.get(ident, 0) > 0:
             by_id[ident] -= 1
-            by_type[started["type"]] = by_type.get(started["type"], 0) - 1
+            by_type[tkey] = by_type.get(tkey, 0) - 1
             continue
         survivors.append(started)
     remaining = []
     for started in survivors:
-        if by_type.get(started["type"], 0) > 0:
-            by_type[started["type"]] -= 1
+        tkey = (started["turn"], started["type"])
+        if by_type.get(tkey, 0) > 0:
+            by_type[tkey] -= 1
             continue
         remaining.append(started)
     d["in_flight"] = remaining
@@ -169,9 +177,10 @@ def _identity(item, turn):
     names a command the stream visibly shows finishing.
 
     Ids are imperfect -- they restart per turn and repeat across types -- so
-    they are used as a *hint*, with a per-type count as the fallback. Neither
-    alone is sufficient: matching only by id mishandles id-less and reused ids,
-    and matching only by count cannot tell two concurrent commands apart.
+    they are used as a *hint*, with a per-(turn, type) count as the fallback.
+    Neither alone is sufficient: matching only by id mishandles id-less and
+    reused ids, and matching only by count cannot tell two concurrent commands
+    apart. That count is turn-scoped for the same reason this key is.
     """
     itype = item.get("type")
     if not isinstance(itype, str):
@@ -185,7 +194,8 @@ def _identity(item, turn):
 def _collect_item(d, item):
     itype = item.get("type")
     if isinstance(itype, str):
-        d["_done_types"][itype] = d["_done_types"].get(itype, 0) + 1
+        tkey = (d["_turn"], itype)
+        d["_done_types"][tkey] = d["_done_types"].get(tkey, 0) + 1
         ident = _identity(item, d["_turn"])
         if ident is not None:
             d["_done_ids"][ident] = d["_done_ids"].get(ident, 0) + 1
