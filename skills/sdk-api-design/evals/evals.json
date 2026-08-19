@@ -1,0 +1,47 @@
+{
+  "skill_name": "sdk-api-design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design the public TypeScript API for a new Acme Document Conversion SDK. Do not implement the transport yet. The product request says: 'Expose the REST endpoints directly, let callers set worker-thread count and polling interval, and add a ConverterFactory with one method per file format.' The actual users are application developers who need to submit a local file or URL, wait for conversion when convenient, inspect progress, cancel work, and download either the converted bytes or a result URL. Most users convert one document at a time; batch systems need to manage many in-flight conversions. Sketch the SDK surface and show how client code would use it. Call out unresolved choices and what you deliberately leave out.",
+      "expected_output": "A language-native design brief that recovers the underlying use cases from the requested mechanisms, sketches a compact public surface, tests it with TypeScript client code before implementation, and explains omissions and tradeoffs using only mapped Bloch principles.",
+      "files": [],
+      "expectations": [
+        "[B02-B03] The output identifies the application-developer audience, separates user outcomes from the requested REST/thread/polling/factory mechanisms, and states concrete ordinary and batch use cases.",
+        "[B04-B05] The output presents a compact whole-surface sketch with one-line contracts and realistic TypeScript client trials before any transport implementation.",
+        "[B09-B12, B19] The design minimizes conceptual weight, hides worker and endpoint plumbing, and places necessary repeated conversion workflow inside the SDK.",
+        "[B10, B28] The output includes explicit omissions or rejected requested mechanisms, with reasons tied to use cases rather than unsupported preference.",
+        "[B15, B23-B27] The proposed shape is natural TypeScript rather than Java transliteration and explains types, parameters, results, and failures in terms of client safety.",
+        "[source-only audit] Every normative API-design rationale is mapped to a Bxx principle or clearly labeled as a user requirement or TypeScript mechanism rather than additional doctrine."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review this proposed public SDK API. Report findings only; do not rewrite the implementation. The SDK wraps a hosted records service:\n\n```text\nclass RecordClient extends SqlConnection\n  public string endpoint\n  public bool isReady() // returns the old readiness flag and clears it\n  public void configure(string host, string database, string user, string password, int connectTimeoutMs, int readTimeoutMs, int retries, int retryDelayMs)\n  public void put(string id, string json) // accepts any string now; malformed JSON fails during a later flush()\n  public string find(string query) // returns null when there are no matches; otherwise returns newline-separated id|title|score text\n  public string lastSqlError()\n  public void export(string id, OutputStream out) // callers must first create ExportTransformerFactory, create a transformer, copy the record schema into it, wrap out in StreamResult, call transform, and catch ImpossibleTransformException\n```\n\nThe author says the API is small because it has only seven public methods and that exposing SQL makes debugging easier. Intended users are business-application developers. The storage engine may change next year. Prioritize the most consequential public API problems, connect each to client harm, and acknowledge real tradeoffs.",
+      "expected_output": "A prioritized, evidence-based API review that catches conceptual, naming, mutation, delayed-failure, weak-type, sentinel, string-parsing, implementation-leak, parameter-list, inheritance, and client-boilerplate problems without turning the report into a style checklist.",
+      "files": [],
+      "expectations": [
+        "[B01, B08] Findings are ordered by irreversible client impact and account for the stated possibility that the storage engine will change.",
+        "[B10-B12] The review rejects method count as the measure of simplicity and identifies public SQL inheritance, SQL errors, mutable fields, and configuration details as conceptual weight or implementation leakage.",
+        "[B17-B21] The review identifies surprising readiness mutation, dishonest inheritance or unsafe extension, repeated export ceremony, and delayed malformed-input failure, explaining concrete client harm.",
+        "[B22, B24-B27] The review identifies parseable result/error strings, undifferentiated string inputs, the long same-shaped parameter list, null sentinel, and failure-flow issues.",
+        "[B28] Each reported issue includes evidence, mapped principle, client harm, smallest coherent correction, and any credible tradeoff; internal style preferences are not presented as defects.",
+        "[source-only audit] Normative review criteria map to Bxx principles and do not import an unrelated SDK rulebook."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Implement a small, public Go SDK API for an alert-delivery service, including representative tests and exported documentation. Start by validating the surface with client-side examples rather than jumping straight to internals. Requirements: applications create a reusable client, send an alert to an email address or webhook, optionally attach string key/value template data, inspect the provider's structured delivery result, and treat provider rejection differently from invalid caller input. The service is HTTP today, but the SDK contract must not prevent a different transport later. The team proposed `NewAlertClient(host string, useTLS bool, threads int, retryCount int, retryDelayMs int)` and `Send(to string, channel string, template string, variablesJson string) (string, error)`. You may replace that proposal. Show the files or code you would deliver and briefly explain the public design decisions. Do not use Java-style overloads, builders, or checked-exception analogies unless Go itself makes such a mechanism natural.",
+      "expected_output": "A Go-native implementation handoff that derives a compact surface from use cases, demonstrates client code first, hides HTTP and worker mechanics, uses appropriate structured values and early validation, documents exported contracts, and includes tests and exemplary usage.",
+      "files": [],
+      "expectations": [
+        "[B03-B05] The output states the use cases, sketches the public Go surface, and shows realistic client examples before presenting implementation details.",
+        "[B03, B10-B11, B15] The implementation hides HTTP, TLS, and thread representation, omits proposed thread/retry controls unless a demonstrated use case requires them, and uses Go-native mechanisms rather than Java transliteration.",
+        "[B19-B27] The public API removes repeatable client plumbing, validates invalid caller input early, represents destination/template/result data structurally, and distinguishes normal results from exceptional failures without string parsing or rare sentinels.",
+        "[B13] Exported types and operations document applicable contracts, including side effects, ownership or copying of template data, and failure behavior.",
+        "[B05] The output includes exemplary usage and representative tests that preserve the stated use cases and likely misuse cases.",
+        "[B28 and source-only audit] Design rationales cite mapped Bxx principles or are clearly identified as user/repository requirements or Go-specific mechanisms, with no outside SDK doctrine."
+      ]
+    }
+  ]
+}
