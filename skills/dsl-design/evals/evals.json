@@ -1,0 +1,50 @@
+{
+  "skill_name": "dsl-design",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "design-feature-flag-fluent-api",
+      "prompt": "I'm building a Python SDK for our feature-flag service, Flagship. Users define flags in code: a flag has a key, a set of variants, a default variant, and targeting rules that match user attributes (country, subscription plan, email domain) or a percentage rollout, each rule mapping to a variant. Today people build big nested dicts and it's really error-prone — typos in keys silently do nothing, and you only find out one mistake at a time when the service rejects the config. Design the public API for defining flags: something pleasant to read but hard to misuse. Write a design doc named flagship_api_design.md with the proposed API (shapes of the calls, a realistic usage example for a flag with 3 rules), the error-handling behavior, and the rationale for each major choice.",
+      "expected_output": "A design doc proposing a builder/fluent layer separate from a plain model, call shapes chosen per what is required vs optional (required args in constructors/factories, optional via chaining/kwargs), explicit key validation instead of silent dict typos, error collection reporting all problems at once, and rationale tied to readability and misuse-resistance.",
+      "files": [],
+      "assertions": [
+        "flagship_api_design.md exists and contains a realistic usage example defining a flag with 3 targeting rules",
+        "Proposes a fluent/builder layer kept separate from the plain model objects users hold at runtime (no fluent mutators on domain/response objects)",
+        "Required elements (flag key, variants, default variant) are supplied via constructor/factory/required arguments, not via omit-able chained setters",
+        "Unknown or misspelled option/attribute keys fail loudly via explicit validation instead of silently doing nothing",
+        "Validation collects and reports all configuration problems in one pass instead of failing on the first error",
+        "Each major API choice is accompanied by an explicit rationale (readability, misuse-resistance, or enforcement reasoning)"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "review-order-sdk-api",
+      "prompt": "Please review the public API of our order-processing SDK in order_sdk.py — customers keep telling us it's confusing and error-prone, and we're planning a v2 so breaking changes are on the table. What is wrong with the current design, and how should we restructure it? Be specific about each problem and what replaces it. Save your review as api_review.md.",
+      "expected_output": "A review that identifies the module-global current-order state, the unvalidated options dict (silently ignoring unknown keys, so the docstring's 'retrys' typo does nothing), fluent mutators living on the Order domain object (including the query-named priority() that mutates), fail-fast single-error validation with print in a library layer, the required customer_id being settable only via an optional chained setter, and the .ordertpl loader silently skipping unrecognized lines with no version marker in the format — each with a concrete replacement (separate builder, validated options/kwargs, error collection, loud parse failures, format versioning).",
+      "files": ["files/order_sdk.py"],
+      "assertions": [
+        "api_review.md identifies the module-level global current-order state (begin_order/add_item/set_discount mutating _current_order) as a defect and proposes instance- or builder-scoped construction",
+        "Identifies that configure() silently ignores unknown option keys (e.g. the docstring's 'retrys' typo does nothing) and proposes explicit key validation or keyword arguments that fail loudly",
+        "Identifies fluent mutators living on the Order domain object (with_customer/with_shipping returning self, query-named priority() that mutates) and proposes moving the fluent surface to a separate builder while keeping Order plain",
+        "Identifies fail-fast single-error validation and the print() call inside the library layer, and proposes collecting all validation problems into a structured result reported at once",
+        "Identifies that the required customer_id can only be set via an optional chained setter and proposes making required inputs required at construction/submission signature level",
+        "Identifies that load_order_template silently skips unrecognized lines and proposes loud parse errors with line positions and/or a version marker for the .ordertpl format"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "architect-pipeline-config-dsl",
+      "prompt": "Our CI product needs a pipeline configuration format. Teams will define pipelines: named stages that run commands, dependencies between stages (fan-in/fan-out), triggers (push, schedule, manual), per-stage environment and caching options. Some config authors are not engineers (release managers edit these files). We're debating YAML vs a custom syntax vs 'just write it in Python'. We also plan to later generate small client libraries in three languages for triggering pipelines via our API. Architect this end to end: which format style and why, how we parse/represent/validate/execute pipelines, how errors are reported to authors, how the format evolves over time, and how the generated client libraries should be structured. Write it up as pipeline_config_architecture.md.",
+      "expected_output": "An architecture doc that separates a semantic model (pipeline/stage/dependency graph) from the config syntax, justifies the format choice using audience (non-engineer authors favor an external restricted format) and tooling factors, chooses a parsing approach with reasoning, validates into a full error report with source positions (not first-error), includes a version marker and migration plan for the format, an explain/visualize facility for the dependency graph, and generated clients structured as a thin generated layer over a shared handwritten runtime with a no-hand-edits customization story.",
+      "files": [],
+      "assertions": [
+        "pipeline_config_architecture.md defines a semantic model (pipeline/stage/dependency graph representation) as an explicit layer separate from the config syntax, with validation living in the model rather than the parser",
+        "Justifies the format choice using the author audience (non-engineer release managers) and boundary/tooling reasoning, not just aesthetics",
+        "Error reporting collects all validation problems in one pass with source positions (file/line or field path), instead of stopping at the first error",
+        "The format carries a version marker from day one and the doc states a migration/evolution plan",
+        "Includes an explain/trace or visualization facility for the pipeline graph or execution decisions (why a stage ran/was skipped)",
+        "Generated client libraries are structured as a thin generated layer over a shared handwritten runtime per language, with customization that never requires hand-editing generated files"
+      ]
+    }
+  ]
+}
