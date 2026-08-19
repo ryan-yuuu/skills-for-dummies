@@ -1,0 +1,51 @@
+{
+  "skill_name": "hexagonal-architecture",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "design-billing-service",
+      "prompt": "I'm starting a subscription billing service in Python — FastAPI for the HTTP layer, Postgres for storage, Stripe for charging cards, and we send dunning emails through SES. I want the core billing logic to be testable without any of that infrastructure running. Can you design this with hexagonal architecture? I want to see the ports and adapters breakdown before any code gets written.",
+      "expected_output": "A design document (no implementation) with: actors classified driving/driven; a small set (2-5) of purpose-named ports ('for doing something' style, not technology-named); at least two adapters listed per port including test doubles; a technology-free hexagon description; a configurator plan; and a test strategy showing the core runs with zero infrastructure. Should NOT invent internal layers or prescribe DDD as part of the pattern.",
+      "files": [],
+      "assertions": [
+        "Ports are named for purpose ('for doing something' style, e.g. ForChargingPayments), never for a technology (no StripePort/PostgresPort/DatabasePort-style names)",
+        "Every port is explicitly classified as driving (primary) or driven (secondary)",
+        "Port count is small (2-5) and grouped by conversation purpose — Stripe and SES are adapters behind purpose ports, not ports themselves",
+        "Each port lists at least two adapters, and test doubles (fake/stub/spy/in-memory) appear as first-class adapters",
+        "A configurator / composition root is explicitly planned (who wires which adapters, per environment)",
+        "The hexagon/core is described as technology-free (no FastAPI/Postgres/Stripe/SES inside it) and the deliverable is a design doc, not an implementation",
+        "The design does not present internal layers (domain/application/infrastructure) or DDD as a required part of hexagonal architecture"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "implement-inventory-tracker",
+      "prompt": "Build me a small inventory tracker in Python following ports and adapters: I add/remove stock from a CLI, quantities persist to SQLite, and when an item drops below its reorder threshold it should POST an alert to a webhook URL. Include tests — and the tests need to run without touching SQLite or the network.",
+      "expected_output": "Working code where: port interfaces are declared inside the application package and owned by it; the hexagon has no sqlite3/http imports; driven adapters (SQLite repo, webhook notifier) and in-memory/spy doubles exist as parallel implementations of the same ports; a configurator (main) does all wiring; tests drive the driving port with doubles on the driven ports and pass with no infrastructure.",
+      "files": [],
+      "assertions": [
+        "The core/hexagon modules contain no sqlite3, requests, urllib, or http imports (greppable)",
+        "Port interfaces are declared inside the application/core package and owned by it, not defined in adapter modules",
+        "The SQLite repository and webhook notifier implement the same port interfaces as in-memory/spy test doubles (parallel adapter implementations exist)",
+        "Adapter instantiation and wiring happen only in a configurator/composition root (main entry point); the core never constructs a concrete adapter",
+        "The CLI is a driver adapter outside the core; core logic contains no argv parsing or console I/O",
+        "The test suite passes (per test_run.txt) and exercises the core through its driving port with doubles on the driven ports — no database file or network needed"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "review-tangled-order-service",
+      "prompt": "Can you review this order service against hexagonal architecture and tell me how to fix it incrementally?\n\n```python\n# orders/service.py\nimport sqlite3, requests\n\nclass OrderService:\n    def __init__(self, db_path: str):\n        self.conn = sqlite3.connect(db_path)\n\n    def place_order(self, customer_id: int, item: str, qty: int):\n        cur = self.conn.execute(\n            \"SELECT price FROM items WHERE name=?\", (item,))\n        price = cur.fetchone()[0]\n        total = price * qty\n        if total > 1000:\n            total *= 0.95  # bulk discount\n        self.conn.execute(\n            \"INSERT INTO orders (customer, item, qty, total) VALUES (?,?,?,?)\",\n            (customer_id, item, qty, total))\n        self.conn.commit()\n        requests.post(\"https://hooks.internal/orders\",\n                      json={\"customer\": customer_id, \"total\": total})\n        return total\n```\n\n# webapp.py instantiates OrderService('prod.db') directly inside the Flask route handler.",
+      "expected_output": "A review that identifies the concrete violations with locations (sqlite3/requests imports in core logic; no ports; pricing/discount logic coupled to SQL; wiring inside the route handler; no way to test without DB and network), maps each to the pattern's rules, and proposes an incremental refactor sequence that establishes the no-infrastructure test configuration early. Should use correct driving/driven port vocabulary and not propose a layered rewrite.",
+      "files": [],
+      "assertions": [
+        "Identifies the sqlite3 and requests usage inside core business logic as boundary violations, citing the specific lines/statements",
+        "Identifies the bulk-discount/pricing computation as core logic that must remain technology-free inside the hexagon",
+        "Identifies OrderService construction inside the Flask route handler as missing-configurator wiring and proposes a composition root",
+        "Proposes application-owned driven ports for persistence and notification, using correct driving/driven (or primary/secondary) port vocabulary",
+        "The refactor plan is an incremental sequence and establishes the no-infrastructure test configuration (doubles on driven ports) early, not as an afterthought",
+        "Does not propose a layered rewrite (domain/application/infrastructure layers) as the fix or misrepresent layers as part of the pattern"
+      ]
+    }
+  ]
+}

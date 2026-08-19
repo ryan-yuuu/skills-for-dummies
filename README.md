@@ -63,6 +63,20 @@ _Vendored from [google/adk-python](https://github.com/google/adk-python) (Apache
 npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill google-adk-agent-builder
 ```
 
+### [hexagonal-architecture](skills/hexagonal-architecture)
+
+Design, implement, and review code following Hexagonal Architecture (Ports and
+Adapters) as Cockburn defines it — technology-free core, purpose-named ports
+owned by the application, swappable adapters with first-class test doubles, and
+a tests-and-mocks-first build order. Includes a reference for applying the
+pattern to SDK/library design, grounded in primary sources.
+
+#### Install
+
+```bash
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill hexagonal-architecture
+```
+
 <br>
 
 ## License
