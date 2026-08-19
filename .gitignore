@@ -220,3 +220,6 @@ __marimo__/
 
 .agents/
 .claude/
+
+# Skill eval workspaces (skill-creator iteration runs, gradings, benchmarks)
+skills/*-workspace/
