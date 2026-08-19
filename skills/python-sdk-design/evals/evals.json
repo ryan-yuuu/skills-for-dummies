@@ -1,0 +1,68 @@
+{
+  "skill_name": "python-sdk-design",
+  "evals": [
+    {
+      "id": 1,
+      "name": "design-new-sdk",
+      "prompt": "We have an internal REST service called Ledger at https://ledger.internal.acme.com that stores 'entries' (fields: id, amount, currency, memo, created_at, etag). The API: PUT /entries/{id} creates an entry (409 if it already exists), GET /entries/{id} fetches one (404 if missing), PATCH /entries/{id} partially updates, DELETE /entries/{id} deletes, GET /entries?page_token=... lists entries returning {items, next_page_token}, and POST /exports starts an export job that you poll at GET /exports/{job_id} until status is 'done'. Auth is a bearer token obtained from a credential object that has a get_token() method. Please design and implement a Python client library for this service - I want it to feel like a professional, polished SDK that we can publish on our internal PyPI. Sync support is the priority but we will want async eventually, so design with that in mind.",
+      "expected_output": "A Python client library whose public surface follows SDK best practices: a LedgerClient class (Client suffix), constructor with positional endpoint + credential and keyword-only options, standard verb methods (create_entry failing on exists, get_entry raising on missing, update_entry with flattened kwargs, delete_entry idempotent), list_entries returning a paged iterable with by_page() rather than exposing page tokens on the method, begin_export returning a poller, exceptions raised on failure (never None/False returns), keyword-only optional args including timeout, typed models with __repr__, and a structure that leaves room for an .aio async namespace.",
+      "files": [],
+      "assertions": [
+        "Service client class name ends with 'Client' (e.g. LedgerClient)",
+        "Client constructor takes endpoint and credential positionally and all other settings as keyword-only arguments; no options-bag object",
+        "Enumeration is named list_entries and returns a paged iterable that transparently follows page tokens and exposes a by_page() method (not a plain list or an (items, token) tuple)",
+        "The list_ method itself does not accept a page/continuation token parameter (continuation belongs to by_page())",
+        "Export is exposed as a begin_-prefixed method returning a poller object with result()/done()/wait() rather than a method that blocks or makes the caller poll manually",
+        "Failures raise exceptions: create on 409 and get on 404 raise typed exceptions; no public method returns None or False to signal an error",
+        "Update method uses flattened keyword arguments (e.g. amount=..., memo=...) per the update_ verb semantics",
+        "Every service method accepts an optional keyword-only timeout argument",
+        "An Entry model class exists with PascalCase name, etag attribute, and a __repr__ implementation",
+        "Exception design distinguishes transport/connection failures from service error responses via distinct exception types",
+        "The sync client contains no async methods (async is left to a separate aio namespace/class, possibly described as future work)",
+        "Public methods and models carry type hints using built-in generics and docstrings"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "review-flawed-sdk",
+      "prompt": "One of our teams wrote this client library for our internal document store service - the file is docstore_sdk.py in the working directory. Before we publish it to our internal PyPI I'd like a design review. Please review the public API design against Python SDK best practices and produce a written review that lists the concrete problems and how to fix each one (you don't need to rewrite the whole library, but short illustrative code for the fixes is welcome).",
+      "expected_output": "A review that identifies the seeded violations listed in the assertions.",
+      "files": ["files/docstore_sdk.py"],
+      "assertions": [
+        "Flags that DocStoreService lacks the Client suffix and recommends renaming (e.g. DocStoreClient)",
+        "Flags the ClientOptions options-bag and recommends flat keyword-only constructor arguments instead",
+        "Flags the constructor accepting a connection string and recommends a from_connection_string classmethod with the constructor taking endpoint + credential",
+        "Flags client mutability via set_timeout and recommends an immutable client design",
+        "Flags get_document returning None on 404 and recommends raising a not-found exception instead",
+        "Flags document_exists raising on 404 and recommends returning False for the normal not-found answer",
+        "Flags list_documents returning a (list, token) tuple with a continuation_token parameter and recommends a paged iterable with by_page() handling continuation",
+        "Flags export_documents blocking with a sleep loop and recommends a begin_-prefixed method returning a poller",
+        "Flags upload_document returning True/False and recommends raising exceptions on failure",
+        "Flags direct **kwargs consumption (kwargs.pop) and/or non-keyword-only optional parameters and recommends explicit keyword-only arguments",
+        "Flags the isinstance check against the Document type and recommends structural typing / accepting dict input",
+        "Flags the camelCase method name getDocumentMetadata and recommends snake_case",
+        "Flags the DocumentState enum's lowercase members and non-extensible design and recommends UPPERCASE members on a (str, Enum) case-insensitive enum",
+        "Flags the async delete_document_async mixed into the sync class and recommends a separate async client with the same class name in an aio namespace",
+        "Flags the staticmethod build_document_url and recommends a module-level function",
+        "Flags that the Document model lacks a __repr__ implementation"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "add-async-support",
+      "prompt": "We ship a small Python SDK for our NotifyChat notifications service - the package is in the notifychat/ directory (it's published as the 'notifychat' package on our internal PyPI). Customers are asking for asyncio support. Please add async support to this library the right way, keeping the existing sync API intact.",
+      "expected_output": "Async support added following the sync/async separation rules described in the assertions.",
+      "files": ["files/notifications_sdk/notifychat/__init__.py", "files/notifications_sdk/notifychat/_models.py", "files/notifications_sdk/notifychat/_client.py"],
+      "assertions": [
+        "Async client lives in an aio sub-namespace (notifychat.aio or notifychat/aio/), not in the package root",
+        "Async client class has the exact same name NotificationClient - no Async prefix or suffix in the class name",
+        "Async methods keep the same names as the sync ones (send_notification, get_notification) with no _async suffixes",
+        "Model types (Notification, NotificationChannel) are imported from the existing sync module, not duplicated in the aio namespace",
+        "Async implementation uses async def / await with an async-capable HTTP stack (aiohttp or httpx async client), not the requests library",
+        "The existing sync client class remains sync-only - no async methods were added to it and its public API is unchanged",
+        "The async client mirrors the sync surface: same constructor shape (endpoint, credential, keyword-only options) and keyword-only timeout on methods",
+        "The async client supports async context management or an explicit close for its underlying session"
+      ]
+    }
+  ]
+}
