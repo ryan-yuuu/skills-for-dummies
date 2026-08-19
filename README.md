@@ -77,6 +77,49 @@ pattern to SDK/library design, grounded in primary sources.
 npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill hexagonal-architecture
 ```
 
+### [python-sdk-design](skills/python-sdk-design)
+
+Design and implement production-quality Python SDKs and client libraries, using
+the Azure SDK for Python guidelines as the canonical model of good SDK
+craftsmanship — service client design, method conventions (paging, long-running
+operations, error behavior), model types, packaging and versioning,
+logging/tracing/telemetry, and Pythonic style.
+
+#### Install
+
+```bash
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill python-sdk-design
+```
+
+### [sdk-api-design](skills/sdk-api-design)
+
+Design, implement, and review language-agnostic SDK and client-library public
+APIs using the durable principles from Joshua Bloch's talk "How to Design a
+Good API and Why It Matters" — use-case-first design, small hard-to-misuse
+surfaces, and evidence-backed reviews, with every rule cited back to the source.
+
+#### Install
+
+```bash
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill sdk-api-design
+```
+
+### [dsl-design](skills/dsl-design)
+
+Design, implement, and review fluent APIs, SDKs, config formats, and
+domain-specific languages using the principles from Fowler's
+_Domain-Specific Languages_ — a semantic model separated from every surface,
+call shapes chosen from the grammar of what callers supply, collected
+structured errors, and the generated-SDK architecture (thin generated layer
+over a handwritten runtime, Generation Gap). Backed by a complete cited
+distillation of the book in [docs/dsl-design-principles.md](docs/dsl-design-principles.md).
+
+#### Install
+
+```bash
+npx skills add https://github.com/ryan-yuuu/skills-for-dummies --skill dsl-design
+```
+
 <br>
 
 ## License
